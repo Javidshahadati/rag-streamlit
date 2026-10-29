@@ -16,7 +16,7 @@ def load_pipeline():
     FILE_PATH = None
     for root, dirs, files in os.walk("."):
         for f in files:
-            if f.lower().endswith((".pdf", ".txt")):
+            if f.lower().endswith((".pdf", ".txt")) and f != "requirements.txt":
                 FILE_PATH = os.path.join(root, f)
                 break
         if FILE_PATH:
@@ -66,12 +66,12 @@ def load_pipeline():
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
 
-    MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+    MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto",
+        torch_dtype=torch.float32,
+        device_map="cpu",
     )
 
     return embedder, index, chunks, tokenizer, model
@@ -106,7 +106,7 @@ def rag_query(question, embedder, index, chunks, tokenizer, model, top_k=3):
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=300,
+            max_new_tokens=200,
             do_sample=False,
             repetition_penalty=1.1,
         )
