@@ -1,15 +1,21 @@
 import os
-import torch
 import streamlit as st
+import requests
+import numpy as np
+import faiss
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import faiss
-import numpy as np
 
 st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
 st.title("🤖 دستیار RAG — پرسش از سند")
 st.caption("سوال خودت را بپرس. اگر جواب در سند نبود، می‌گویم «در متن نیست».")
+
+# --- خواندن کلیدها از Streamlit Secrets ---
+CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
+CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
+CF_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
+
 
 @st.cache_resource(show_spinner=False)
 def load_pipeline():
@@ -66,18 +72,10 @@ def load_pipeline():
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
 
-    MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float32,
-        device_map="cpu",
-    )
-
-    return embedder, index, chunks, tokenizer, model
+    return embedder, index, chunks
 
 
-def rag_query(question, embedder, index, chunks, tokenizer, model, top_k=3):
+def rag_query(question, embedder, index, chunks, top_k=3):
     q_emb = embedder.encode([question], convert_to_numpy=True)
     distances, indices = index.search(q_emb, top_k)
     retrieved = [chunks[i] for i in indices[0]]
@@ -85,41 +83,38 @@ def rag_query(question, embedder, index, chunks, tokenizer, model, top_k=3):
         [f"[منبع: {c['source']}، بخش {c['page']}]\n{c['text']}" for c in retrieved]
     )
 
-    messages = [
-        {
-            "role": "system",
-            "content": "تو یک دستیار هستی که فقط بر اساس متن داده‌شده جواب می‌دهد. "
-                       "اگر جواب در متن نبود، دقیقاً بگو «در متن نیست». "
-                       "همیشه فارسی جواب بده و در پایان، منبع را ذکر کن.",
-        },
-        {
-            "role": "user",
-            "content": f"متن:\n{context}\n\nسوال: {question}\n\nجواب:",
-        },
-    ]
+    headers = {
+        "Authorization": f"Bearer {CF_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": CF_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "تو یک دستیار هستی که فقط بر اساس متن داده‌شده جواب می‌دهد. "
+                           "اگر جواب در متن نبود، دقیقاً بگو «در متن نیست». "
+                           "همیشه فارسی جواب بده و در پایان، منبع را ذکر کن.",
+            },
+            {
+                "role": "user",
+                "content": f"متن:\n{context}\n\nسوال: {question}\n\nجواب:",
+            },
+        ],
+    }
 
-    text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    response = requests.post(CF_URL, headers=headers, json=payload, timeout=60)
+    if response.status_code != 200:
+        return f"خطای API (کد {response.status_code}): {response.text}", []
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=200,
-            do_sample=False,
-            repetition_penalty=1.1,
-        )
-
-    answer = tokenizer.decode(
-        outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
-    )
+    result = response.json()
+    answer = result["choices"][0]["message"]["content"]
     sources = list({(c["source"], c["page"]) for c in retrieved})
     return answer.strip(), sources
 
 
-with st.spinner("در حال بارگذاری مدل و ساخت پایگاه برداری... (چند دقیقه)"):
-    embedder, index, chunks, tokenizer, model = load_pipeline()
+with st.spinner("در حال ساخت پایگاه برداری... (چند دقیقه)"):
+    embedder, index, chunks = load_pipeline()
 
 st.success(f"آماده است — {len(chunks)} قطعه ایندکس شد.")
 
@@ -137,9 +132,7 @@ if prompt := st.chat_input("سوال خودت را بنویس..."):
 
     with st.chat_message("assistant"):
         with st.spinner("در حال فکر کردن..."):
-            answer, sources = rag_query(
-                prompt, embedder, index, chunks, tokenizer, model
-            )
+            answer, sources = rag_query(prompt, embedder, index, chunks)
         if "در متن نیست" in answer:
             full = f"❌ {answer}"
         else:
