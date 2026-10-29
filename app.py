@@ -1,4 +1,6 @@
 import os
+import io
+import json
 import streamlit as st
 import requests
 import numpy as np
@@ -8,17 +10,35 @@ from sentence_transformers import SentenceTransformer
 
 st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
 st.title("🤖 دستیار RAG — پرسش از سند")
-st.caption("سوال خودت را بپرس. اگر جواب در سند نبود، می‌گویم «در متن نیست».")
+st.caption("فایل PDF یا TXT خودت را آپلود کن، یا از سند پیش‌فرض استفاده کن.")
 
-# --- خواندن کلیدها از Streamlit Secrets ---
+# --- کلیدها ---
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
 CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
 
 
-@st.cache_resource(show_spinner=False)
-def load_pipeline():
+def extract_text_from_upload(uploaded_file):
+    name = uploaded_file.name.lower()
+    content = uploaded_file.read()
+    if name.endswith(".pdf"):
+        reader = PdfReader(io.BytesIO(content))
+        pages = []
+        for i, page in enumerate(reader.pages, start=1):
+            text = page.extract_text()
+            if text and text.strip():
+                pages.append({"page": i, "text": text.strip()})
+        return {"name": uploaded_file.name, "pages": pages}
+    elif name.endswith(".txt"):
+        text = content.decode("utf-8")
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        pages = [{"page": i + 1, "text": p} for i, p in enumerate(paragraphs)]
+        return {"name": uploaded_file.name, "pages": pages}
+    return None
+
+
+def extract_text_from_default():
     FILE_PATH = None
     for root, dirs, files in os.walk("."):
         for f in files:
@@ -27,11 +47,8 @@ def load_pipeline():
                 break
         if FILE_PATH:
             break
-
     if not FILE_PATH:
-        st.error("هیچ فایل PDF یا TXT پیدا نشد.")
-        st.stop()
-
+        return None
     if FILE_PATH.lower().endswith(".pdf"):
         reader = PdfReader(FILE_PATH)
         pages = []
@@ -44,6 +61,12 @@ def load_pipeline():
             full_text = f.read()
         paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
         pages = [{"page": i + 1, "text": p} for i, p in enumerate(paragraphs)]
+    return {"name": os.path.basename(FILE_PATH), "pages": pages}
+
+
+@st.cache_resource(show_spinner=False)
+def build_index(doc_key, doc_name, pages_json):
+    pages = json.loads(pages_json)
 
     def split_text(text, chunk_size=400, overlap=50):
         words = text.split()
@@ -57,11 +80,7 @@ def load_pipeline():
     chunks = []
     for p in pages:
         for chunk_text in split_text(p["text"]):
-            chunks.append({
-                "text": chunk_text,
-                "source": os.path.basename(FILE_PATH),
-                "page": p["page"],
-            })
+            chunks.append({"text": chunk_text, "source": doc_name, "page": p["page"]})
 
     embedder = SentenceTransformer(
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -71,7 +90,6 @@ def load_pipeline():
 
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
-
     return embedder, index, chunks
 
 
@@ -102,7 +120,6 @@ def rag_query(question, embedder, index, chunks, top_k=3):
             },
         ],
     }
-
     response = requests.post(CF_URL, headers=headers, json=payload, timeout=60)
     if response.status_code != 200:
         return f"خطای API (کد {response.status_code}): {response.text}", []
@@ -113,13 +130,36 @@ def rag_query(question, embedder, index, chunks, top_k=3):
     return answer.strip(), sources
 
 
-with st.spinner("در حال ساخت پایگاه برداری... (چند دقیقه)"):
-    embedder, index, chunks = load_pipeline()
+# --- انتخاب سند از سایدبار ---
+st.sidebar.header("📂 سند خودت را انتخاب کن")
+uploaded_file = st.sidebar.file_uploader(
+    "فایل PDF یا TXT آپلود کن (اختیاری)", type=["pdf", "txt"]
+)
 
-st.success(f"آماده است — {len(chunks)} قطعه ایندکس شد.")
+if uploaded_file is not None:
+    doc = extract_text_from_upload(uploaded_file)
+    doc_key = f"upload_{uploaded_file.name}_{uploaded_file.size}"
+else:
+    doc = extract_text_from_default()
+    doc_key = "default"
 
+if doc is None or not doc["pages"]:
+    st.error("هیچ سند معتبری یافت نشد.")
+    st.stop()
+
+pages_json = json.dumps(doc["pages"], ensure_ascii=False)
+
+with st.spinner(f"در حال ساختن پایگاه برداری از «{doc['name']}»..."):
+    embedder, index, chunks = build_index(doc_key, doc["name"], pages_json)
+
+st.success(f"✅ آماده است — {len(chunks)} قطعه از «{doc['name']}» ایندکس شد.")
+
+# --- حافظه چت (اگر سند عوض شد، پاک شود) ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if st.session_state.get("current_doc_key") != doc_key:
+    st.session_state.messages = []
+    st.session_state.current_doc_key = doc_key
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
