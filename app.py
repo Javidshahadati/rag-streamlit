@@ -13,7 +13,7 @@ st.caption("سوال خودت را بپرس. اگر جواب در سند نبو�
 # --- خواندن کلیدها از Streamlit Secrets ---
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
-CF_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
 
 
