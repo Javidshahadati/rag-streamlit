@@ -1,8 +1,6 @@
 streamlit
 sentence-transformers
 faiss-cpu
-transformers
-accelerate
-torch
-pypdf
+requests
 numpy
+pypdf
