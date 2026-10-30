@@ -1,12 +1,14 @@
 # RAG PDF Assistant
 
+**Stop hallucinating. Get answers only from your documents, with sources.**
+
 ## 🔗 Live Demo
 **👉 [javid-rag-assistant.streamlit.app](https://javid-rag-assistant.streamlit.app)**
 
 Upload your own PDF or TXT and ask questions — the assistant answers only from the document, cites the source, and says "not in text" when the answer isn't there.
 
 ## 📌 توضیح
-یک سیستم RAG کامل که هر کاربر می‌تواند **سند خودش (PDF یا TXT)** را آپلود کند و از آن سوال بپرسد. جواب همراه با منبع (نام فایل و شماره صفحه) و در صورت نبود جواب، «در متن نیست».
+یک سیستم RAG کامل که هر کاربر می‌تواند **سند خودش (PDF یا TXT)** را آپلود کند و از آن سوال بپرسد. جواب همراه با منبع (نام فایل و شماره صفحه) و در صورت نبود جواب، «در متن نیست». **دوزبانه** (فارسی و انگلیسی).
 
 ## 🎯 نتیجه
 - **دقت روی سوالات در متن:** ۱۰۰٪
@@ -14,6 +16,7 @@ Upload your own PDF or TXT and ask questions — the assistant answers only from
 - **تعداد توهم:** ۰
 - **پشتیبانی از PDF و TXT**
 - **آپلود سند توسط کاربر**
+- **دوزبانه (فارسی + انگلیسی)**
 
 ## 🛠️ تکنولوژی
 - Streamlit (رابط کاربری)
