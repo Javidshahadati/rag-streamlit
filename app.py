@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import re
 import streamlit as st
 import requests
 import numpy as np
@@ -13,7 +14,6 @@ st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
 st.title("🤖 RAG PDF Assistant — دستیار RAG")
 st.caption("Ask in English or Persian — the assistant answers in the same language.")
 
-# --- کلیدها ---
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
 CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
@@ -22,9 +22,7 @@ CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/c
 
 def detect_language(text):
     persian_chars = set("ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی")
-    if any(c in persian_chars for c in text):
-        return "Persian"
-    return "English"
+    return "Persian" if any(c in persian_chars for c in text) else "English"
 
 
 def extract_text_from_upload(uploaded_file):
@@ -99,43 +97,64 @@ def build_index(doc_key, doc_name, pages_json):
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
 
-    # --- ساخت BM25 برای جستجوی کلیدواژه ---
     tokenized_chunks = [c["text"].split() for c in chunks]
     bm25 = BM25Okapi(tokenized_chunks)
 
     return embedder, index, chunks, bm25
 
 
-def hybrid_search(question, embedder, index, chunks, bm25, top_k=3, alpha=0.5):
-    """ترکیب جستجوی برداری و کلیدواژه"""
-    # ۱. جستجوی برداری
+def hybrid_search(question, embedder, index, chunks, bm25, top_k=6, alpha=0.5):
     q_emb = embedder.encode([question], convert_to_numpy=True)
-    distances, indices = index.search(q_emb, top_k * 2)
-    vector_scores = {}
-    for rank, idx in enumerate(indices[0]):
-        vector_scores[int(idx)] = 1 / (rank + 1)
+    distances, indices = index.search(q_emb, top_k)
+    vector_scores = {int(idx): 1 / (rank + 1) for rank, idx in enumerate(indices[0])}
 
-    # ۲. جستجوی کلیدواژه
     tokenized_query = question.split()
     bm25_scores_arr = bm25.get_scores(tokenized_query)
-    bm25_top = bm25_scores_arr.argsort()[::-1][:top_k * 2]
-    keyword_scores = {}
-    for rank, idx in enumerate(bm25_top):
-        keyword_scores[int(idx)] = 1 / (rank + 1)
+    bm25_top = bm25_scores_arr.argsort()[::-1][:top_k]
+    keyword_scores = {int(idx): 1 / (rank + 1) for rank, idx in enumerate(bm25_top)}
 
-    # ۳. ترکیب امتیازها
     all_indices = set(vector_scores) | set(keyword_scores)
-    combined = {}
-    for idx in all_indices:
-        combined[idx] = alpha * vector_scores.get(idx, 0) + (1 - alpha) * keyword_scores.get(idx, 0)
+    combined = {
+        idx: alpha * vector_scores.get(idx, 0) + (1 - alpha) * keyword_scores.get(idx, 0)
+        for idx in all_indices
+    }
 
-    # ۴. انتخاب بهترین‌ها
     sorted_idx = sorted(combined, key=combined.get, reverse=True)[:top_k]
     return [chunks[i] for i in sorted_idx]
 
 
-def rag_query(question, embedder, index, chunks, bm25, top_k=3):
-    retrieved = hybrid_search(question, embedder, index, chunks, bm25, top_k=top_k)
+def rerank_maxsim(question, candidates, embedder, top_k=3):
+    """
+    Re-ranking با روش MaxSim (شبیه‌سازی ColBERT):
+    هر قطعه را به جمله‌ها می‌شکنیم،
+    بیشترین شباهت جمله به سوال را امتیاز آن قطعه می‌گیریم.
+    """
+    q_emb = embedder.encode([question], convert_to_numpy=True)[0]
+    q_norm = np.linalg.norm(q_emb) + 1e-8
+
+    scored = []
+    for c in candidates:
+        sentences = [s.strip() for s in re.split(r"[.?!؟!]", c["text"]) if len(s.strip()) > 10]
+        if not sentences:
+            sentences = [c["text"]]
+
+        sent_embs = embedder.encode(sentences, convert_to_numpy=True)
+        sent_norms = np.linalg.norm(sent_embs, axis=1) + 1e-8
+        sims = np.dot(sent_embs, q_emb) / (sent_norms * q_norm)
+        max_sim = float(np.max(sims))
+        scored.append((c, max_sim))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [c for c, _ in scored[:top_k]]
+
+
+def rag_query(question, embedder, index, chunks, bm25):
+    # مرحله ۱: Hybrid Search → ۶ کاندید
+    candidates = hybrid_search(question, embedder, index, chunks, bm25, top_k=6)
+
+    # مرحله ۲: Re-ranking → ۳ برتر
+    retrieved = rerank_maxsim(question, candidates, embedder, top_k=3)
+
     context = "\n\n".join(
         [f"[Source: {c['source']}, page/paragraph {c['page']}]\n{c['text']}" for c in retrieved]
     )
@@ -158,8 +177,7 @@ def rag_query(question, embedder, index, chunks, bm25, top_k=3):
             {
                 "role": "system",
                 "content": f"You are an assistant that answers ONLY from the provided text. "
-                           f"If the answer is not in the text, say exactly 'Not in text' "
-                           f"(in {lang}). "
+                           f"If the answer is not in the text, say exactly 'Not in text' (in {lang}). "
                            f"{lang_instruction} "
                            f"At the end, cite the source (file name and page/paragraph).",
             },
@@ -179,11 +197,8 @@ def rag_query(question, embedder, index, chunks, bm25, top_k=3):
     return answer.strip(), sources
 
 
-# --- انتخاب سند از سایدبار ---
 st.sidebar.header("📂 Select your document / سند خودت را انتخاب کن")
-uploaded_file = st.sidebar.file_uploader(
-    "Upload PDF or TXT (optional)", type=["pdf", "txt"]
-)
+uploaded_file = st.sidebar.file_uploader("Upload PDF or TXT (optional)", type=["pdf", "txt"])
 
 if uploaded_file is not None:
     doc = extract_text_from_upload(uploaded_file)
@@ -198,12 +213,14 @@ if doc is None or not doc["pages"]:
 
 pages_json = json.dumps(doc["pages"], ensure_ascii=False)
 
-with st.spinner(f"Building vector index from «{doc['name']}»..."):
+with st.spinner(f"Building index from «{doc['name']}»..."):
     embedder, index, chunks, bm25 = build_index(doc_key, doc["name"], pages_json)
 
-st.success(f"✅ Ready — {len(chunks)} chunks indexed from «{doc['name']}» (Hybrid Search enabled)")
+st.success(
+    f"✅ Ready — {len(chunks)} chunks from «{doc['name']}» "
+    f"(Hybrid Search + Re-ranking enabled)"
+)
 
-# --- حافظه چت ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if st.session_state.get("current_doc_key") != doc_key:
