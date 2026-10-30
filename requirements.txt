@@ -4,3 +4,4 @@ faiss-cpu
 requests
 numpy
 pypdf
+rank_bm25
