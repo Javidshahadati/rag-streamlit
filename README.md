@@ -5,6 +5,9 @@
 ## 🔗 Live Demo
 **👉 [javid-rag-assistant.streamlit.app](https://javid-rag-assistant.streamlit.app)**
 
+## 📄 Case Study
+**👉 [View the full case study](https://docusage-query-flow.base44.app)**
+
 Upload your own PDF or TXT and ask questions — the assistant answers only from the document, cites the source, and says "not in text" when the answer isn't there.
 
 ## 📌 توضیح
