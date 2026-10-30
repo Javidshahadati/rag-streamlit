@@ -124,11 +124,6 @@ def hybrid_search(question, embedder, index, chunks, bm25, top_k=6, alpha=0.5):
 
 
 def rerank_maxsim(question, candidates, embedder, top_k=3):
-    """
-    Re-ranking با روش MaxSim (شبیه‌سازی ColBERT):
-    هر قطعه را به جمله‌ها می‌شکنیم،
-    بیشترین شباهت جمله به سوال را امتیاز آن قطعه می‌گیریم.
-    """
     q_emb = embedder.encode([question], convert_to_numpy=True)[0]
     q_norm = np.linalg.norm(q_emb) + 1e-8
 
@@ -149,10 +144,7 @@ def rerank_maxsim(question, candidates, embedder, top_k=3):
 
 
 def rag_query(question, embedder, index, chunks, bm25):
-    # مرحله ۱: Hybrid Search → ۶ کاندید
     candidates = hybrid_search(question, embedder, index, chunks, bm25, top_k=6)
-
-    # مرحله ۲: Re-ranking → ۳ برتر
     retrieved = rerank_maxsim(question, candidates, embedder, top_k=3)
 
     context = "\n\n".join(
@@ -221,6 +213,57 @@ st.success(
     f"(Hybrid Search + Re-ranking enabled)"
 )
 
+# --- بخش ارزیابی ---
+with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
+    if st.button("Run Evaluation"):
+        test_cases = [
+            {"question": "آیا در متن به Transformer اشاره شده؟", "expected": ["Transformer", "2017"], "in_doc": True},
+            {"question": "BERT چه کاری انجام می‌دهد؟", "expected": ["درک متن", "دوطرفه"], "in_doc": True},
+            {"question": "تفاوت CNN و RNN چیست؟", "expected": ["تصویر", "ترتیبی"], "in_doc": True},
+            {"question": "پایتخت فرانسه کجاست؟", "expected": [], "in_doc": False},
+            {"question": "What is the capital of France?", "expected": [], "in_doc": False},
+            {"question": "What is Transformer?", "expected": ["Transformer", "2017"], "in_doc": True},
+        ]
+        results = []
+        correct_in = 0
+        total_in = 0
+        correct_out = 0
+        total_out = 0
+        hallucinations = 0
+
+        for tc in test_cases:
+            answer, sources = rag_query(tc["question"], embedder, index, chunks, bm25)
+            out_of_doc_answer = ("Not in text" in answer) or ("در متن نیست" in answer)
+
+            if tc["in_doc"]:
+                total_in += 1
+                correct = (not out_of_doc_answer) and any(kw.lower() in answer.lower() for kw in tc["expected"])
+                if correct:
+                    correct_in += 1
+            else:
+                total_out += 1
+                if out_of_doc_answer:
+                    correct_out += 1
+                else:
+                    hallucinations += 1
+
+            results.append({
+                "Question": tc["question"],
+                "Answer": (answer[:80] + "...") if len(answer) > 80 else answer,
+                "Sources": ", ".join([f"{s[0]} p.{s[1]}" for s in sources]) if sources else "-",
+                "Correct": correct if tc["in_doc"] else out_of_doc_answer,
+            })
+
+        in_acc = (correct_in / total_in * 100) if total_in else 0
+        out_acc = (correct_out / total_out * 100) if total_out else 0
+        hall_rate = (hallucinations / total_out * 100) if total_out else 0
+
+        st.write(f"**In-document accuracy:** {in_acc:.1f}%")
+        st.write(f"**Out-of-document accuracy:** {out_acc:.1f}%")
+        st.write(f"**Hallucination rate:** {hall_rate:.1f}%")
+        st.dataframe(results, use_container_width=True)
+
+# --- حافظه چت ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if st.session_state.get("current_doc_key") != doc_key:
