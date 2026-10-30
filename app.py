@@ -19,11 +19,11 @@ CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
 CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
 
-MAX_HISTORY_TURNS = 3  # چند پیام آخر به مدل داده شود
+MAX_HISTORY_TURNS = 3
 
 
 def detect_language(text):
-    persian_chars = set("ابپتثجچحخدذرزسژشصضطظعغفقکگلمنوهی")
+    persian_chars = set("ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی")
     return "Persian" if any(c in persian_chars for c in text) else "English"
 
 
@@ -105,6 +105,38 @@ def build_index(doc_key, doc_name, pages_json):
     return embedder, index, chunks, bm25
 
 
+def generate_query_variants(question, n=3):
+    """تولید n بازنویسی از سوال با LLM. در صورت خطا، لیست خالی."""
+    headers = {
+        "Authorization": f"Bearer {CF_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    prompt = (
+        f"Rewrite the following question in {n} different ways, preserving the meaning "
+        f"but using different words and structures. Keep the same language as the original. "
+        f"Return ONLY the rewritten questions, one per line, without numbering or explanation.\n\n"
+        f"Original question: {question}"
+    )
+    payload = {
+        "model": CF_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 200,
+    }
+    try:
+        response = requests.post(CF_URL, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            text = response.json()["choices"][0]["message"]["content"]
+            variants = []
+            for line in text.split("\n"):
+                line = re.sub(r"^\d+[\.\)\-]\s*", "", line.strip())
+                if line and len(line) > 5 and line.lower() != question.lower():
+                    variants.append(line)
+            return variants[:n]
+    except Exception:
+        pass
+    return []
+
+
 def hybrid_search(question, embedder, index, chunks, bm25, top_k=6, alpha=0.5):
     q_emb = embedder.encode([question], convert_to_numpy=True)
     distances, indices = index.search(q_emb, top_k)
@@ -123,6 +155,26 @@ def hybrid_search(question, embedder, index, chunks, bm25, top_k=6, alpha=0.5):
 
     sorted_idx = sorted(combined, key=combined.get, reverse=True)[:top_k]
     return [chunks[i] for i in sorted_idx]
+
+
+def multi_query_search(question, embedder, index, chunks, bm25, top_k=6, use_expansion=True):
+    """جستجو با چند بازنویسی + ترکیب نتایج با RRF"""
+    queries = [question]
+    if use_expansion:
+        variants = generate_query_variants(question, n=3)
+        queries.extend(variants)
+
+    seen = {}
+    for q in queries:
+        results = hybrid_search(q, embedder, index, chunks, bm25, top_k=top_k)
+        for rank, c in enumerate(results):
+            key = (c["source"], c["page"], c["text"][:60])
+            if key not in seen:
+                seen[key] = {"chunk": c, "score": 0.0}
+            seen[key]["score"] += 1.0 / (rank + 1)  # Reciprocal Rank Fusion
+
+    ranked = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
+    return [r["chunk"] for r in ranked[:top_k]]
 
 
 def rerank_maxsim(question, candidates, embedder, top_k=3):
@@ -146,11 +198,9 @@ def rerank_maxsim(question, candidates, embedder, top_k=3):
 
 
 def build_search_query(question, history):
-    """اگر سوال پیرو باشد، آن را با سوال قبلی ترکیب می‌کنیم تا مستقل شود."""
     if not history:
         return question
 
-    # سوالات کوتاه یا با ضمیر = احتمالاً پیرو
     follow_up_markers = [
         "آن", "این", "او", "بیشتر", "چرا", "چطور", "چه تفاوتی", "ادامه", "مثال",
         "it", "this", "that", "more", "why", "how", "difference", "example",
@@ -159,24 +209,22 @@ def build_search_query(question, history):
         len(question.split()) <= 5
         or any(m in question.lower() for m in follow_up_markers)
     )
-
     if not is_follow_up:
         return question
 
-    last_user = ""
     for msg in reversed(history):
         if msg["role"] == "user":
-            last_user = msg["content"]
-            break
-
-    return f"{last_user} — {question}"
+            return f"{msg['content']} — {question}"
+    return question
 
 
-def rag_query(question, embedder, index, chunks, bm25, history=None):
+def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansion=True):
     history = history or []
     search_query = build_search_query(question, history)
 
-    candidates = hybrid_search(search_query, embedder, index, chunks, bm25, top_k=6)
+    candidates = multi_query_search(
+        search_query, embedder, index, chunks, bm25, top_k=6, use_expansion=use_expansion
+    )
     retrieved = rerank_maxsim(search_query, candidates, embedder, top_k=3)
 
     context = "\n\n".join(
@@ -191,7 +239,6 @@ def rag_query(question, embedder, index, chunks, bm25, history=None):
         else "The user's question is in Persian. Answer in Persian."
     )
 
-    # --- ساخت پیام‌ها با تاریخچه ---
     messages = [
         {
             "role": "system",
@@ -204,12 +251,10 @@ def rag_query(question, embedder, index, chunks, bm25, history=None):
         }
     ]
 
-    # افزودن چند پیام آخر
     recent = history[-(MAX_HISTORY_TURNS * 2):] if history else []
     for msg in recent:
         messages.append({"role": msg["role"], "content": msg["content"]})
 
-    # پیام فعلی با context
     messages.append({
         "role": "user",
         "content": f"Text:\n{context}\n\nQuestion: {question}\n\nAnswer ({lang}):",
@@ -234,6 +279,7 @@ def rag_query(question, embedder, index, chunks, bm25, history=None):
 # --- سایدبار ---
 st.sidebar.header("📂 Select your document / سند خودت را انتخاب کن")
 uploaded_file = st.sidebar.file_uploader("Upload PDF or TXT (optional)", type=["pdf", "txt"])
+use_expansion = st.sidebar.checkbox("Enable Multi-Query Expansion", value=True)
 
 if uploaded_file is not None:
     doc = extract_text_from_upload(uploaded_file)
@@ -253,7 +299,7 @@ with st.spinner(f"Building index from «{doc['name']}»..."):
 
 st.success(
     f"✅ Ready — {len(chunks)} chunks from «{doc['name']}» "
-    f"(Hybrid + Re-ranking + Memory)"
+    f"(Hybrid + Multi-Query + Re-ranking + Memory)"
 )
 
 # --- ارزیابی ---
@@ -271,12 +317,17 @@ with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
         correct_in = total_in = correct_out = total_out = hallucinations = 0
 
         for tc in test_cases:
-            answer, sources = rag_query(tc["question"], embedder, index, chunks, bm25, history=[])
+            answer, sources = rag_query(
+                tc["question"], embedder, index, chunks, bm25,
+                history=[], use_expansion=use_expansion
+            )
             out_of_doc_answer = ("Not in text" in answer) or ("در متن نیست" in answer)
 
             if tc["in_doc"]:
                 total_in += 1
-                correct = (not out_of_doc_answer) and any(kw.lower() in answer.lower() for kw in tc["expected"])
+                correct = (not out_of_doc_answer) and any(
+                    kw.lower() in answer.lower() for kw in tc["expected"]
+                )
                 if correct:
                     correct_in += 1
             else:
@@ -323,7 +374,8 @@ if prompt := st.chat_input("Ask a question... / سوال خودت را بنوی�
     with st.chat_message("assistant"):
         with st.spinner("Thinking... / در حال فکر کردن..."):
             answer, sources = rag_query(
-                prompt, embedder, index, chunks, bm25, history=history_before
+                prompt, embedder, index, chunks, bm25,
+                history=history_before, use_expansion=use_expansion
             )
         if ("Not in text" in answer) or ("در متن نیست" in answer):
             full = f"❌ {answer}"
