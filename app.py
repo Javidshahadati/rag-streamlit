@@ -12,16 +12,18 @@ from rank_bm25 import BM25Okapi
 
 st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
 st.title("🤖 RAG PDF Assistant — دستیار RAG")
-st.caption("Ask in English or Persian — the assistant answers in the same language.")
+st.caption("Ask in English or Persian — the assistant remembers the conversation.")
 
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
 CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
 
+MAX_HISTORY_TURNS = 3  # چند پیام آخر به مدل داده شود
+
 
 def detect_language(text):
-    persian_chars = set("ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی")
+    persian_chars = set("ابپتثجچحخدذرزسژشصضطظعغفقکگلمنوهی")
     return "Persian" if any(c in persian_chars for c in text) else "English"
 
 
@@ -143,9 +145,39 @@ def rerank_maxsim(question, candidates, embedder, top_k=3):
     return [c for c, _ in scored[:top_k]]
 
 
-def rag_query(question, embedder, index, chunks, bm25):
-    candidates = hybrid_search(question, embedder, index, chunks, bm25, top_k=6)
-    retrieved = rerank_maxsim(question, candidates, embedder, top_k=3)
+def build_search_query(question, history):
+    """اگر سوال پیرو باشد، آن را با سوال قبلی ترکیب می‌کنیم تا مستقل شود."""
+    if not history:
+        return question
+
+    # سوالات کوتاه یا با ضمیر = احتمالاً پیرو
+    follow_up_markers = [
+        "آن", "این", "او", "بیشتر", "چرا", "چطور", "چه تفاوتی", "ادامه", "مثال",
+        "it", "this", "that", "more", "why", "how", "difference", "example",
+    ]
+    is_follow_up = (
+        len(question.split()) <= 5
+        or any(m in question.lower() for m in follow_up_markers)
+    )
+
+    if not is_follow_up:
+        return question
+
+    last_user = ""
+    for msg in reversed(history):
+        if msg["role"] == "user":
+            last_user = msg["content"]
+            break
+
+    return f"{last_user} — {question}"
+
+
+def rag_query(question, embedder, index, chunks, bm25, history=None):
+    history = history or []
+    search_query = build_search_query(question, history)
+
+    candidates = hybrid_search(search_query, embedder, index, chunks, bm25, top_k=6)
+    retrieved = rerank_maxsim(search_query, candidates, embedder, top_k=3)
 
     context = "\n\n".join(
         [f"[Source: {c['source']}, page/paragraph {c['page']}]\n{c['text']}" for c in retrieved]
@@ -159,26 +191,36 @@ def rag_query(question, embedder, index, chunks, bm25):
         else "The user's question is in Persian. Answer in Persian."
     )
 
+    # --- ساخت پیام‌ها با تاریخچه ---
+    messages = [
+        {
+            "role": "system",
+            "content": f"You are an assistant that answers ONLY from the provided text. "
+                       f"If the answer is not in the text, say exactly 'Not in text' (in {lang}). "
+                       f"{lang_instruction} "
+                       f"Use the conversation history to understand follow-up questions, "
+                       f"but answer ONLY from the provided text. "
+                       f"At the end, cite the source (file name and page/paragraph).",
+        }
+    ]
+
+    # افزودن چند پیام آخر
+    recent = history[-(MAX_HISTORY_TURNS * 2):] if history else []
+    for msg in recent:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    # پیام فعلی با context
+    messages.append({
+        "role": "user",
+        "content": f"Text:\n{context}\n\nQuestion: {question}\n\nAnswer ({lang}):",
+    })
+
     headers = {
         "Authorization": f"Bearer {CF_API_TOKEN}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": CF_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": f"You are an assistant that answers ONLY from the provided text. "
-                           f"If the answer is not in the text, say exactly 'Not in text' (in {lang}). "
-                           f"{lang_instruction} "
-                           f"At the end, cite the source (file name and page/paragraph).",
-            },
-            {
-                "role": "user",
-                "content": f"Text:\n{context}\n\nQuestion: {question}\n\nAnswer ({lang}):",
-            },
-        ],
-    }
+    payload = {"model": CF_MODEL, "messages": messages}
+
     response = requests.post(CF_URL, headers=headers, json=payload, timeout=60)
     if response.status_code != 200:
         return f"API error (code {response.status_code}): {response.text}", []
@@ -189,6 +231,7 @@ def rag_query(question, embedder, index, chunks, bm25):
     return answer.strip(), sources
 
 
+# --- سایدبار ---
 st.sidebar.header("📂 Select your document / سند خودت را انتخاب کن")
 uploaded_file = st.sidebar.file_uploader("Upload PDF or TXT (optional)", type=["pdf", "txt"])
 
@@ -210,10 +253,10 @@ with st.spinner(f"Building index from «{doc['name']}»..."):
 
 st.success(
     f"✅ Ready — {len(chunks)} chunks from «{doc['name']}» "
-    f"(Hybrid Search + Re-ranking enabled)"
+    f"(Hybrid + Re-ranking + Memory)"
 )
 
-# --- بخش ارزیابی ---
+# --- ارزیابی ---
 with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
     if st.button("Run Evaluation"):
         test_cases = [
@@ -225,14 +268,10 @@ with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
             {"question": "What is Transformer?", "expected": ["Transformer", "2017"], "in_doc": True},
         ]
         results = []
-        correct_in = 0
-        total_in = 0
-        correct_out = 0
-        total_out = 0
-        hallucinations = 0
+        correct_in = total_in = correct_out = total_out = hallucinations = 0
 
         for tc in test_cases:
-            answer, sources = rag_query(tc["question"], embedder, index, chunks, bm25)
+            answer, sources = rag_query(tc["question"], embedder, index, chunks, bm25, history=[])
             out_of_doc_answer = ("Not in text" in answer) or ("در متن نیست" in answer)
 
             if tc["in_doc"]:
@@ -274,14 +313,18 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# --- ورودی چت ---
 if prompt := st.chat_input("Ask a question... / سوال خودت را بنویس..."):
+    history_before = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking... / در حال فکر کردن..."):
-            answer, sources = rag_query(prompt, embedder, index, chunks, bm25)
+            answer, sources = rag_query(
+                prompt, embedder, index, chunks, bm25, history=history_before
+            )
         if ("Not in text" in answer) or ("در متن نیست" in answer):
             full = f"❌ {answer}"
         else:
