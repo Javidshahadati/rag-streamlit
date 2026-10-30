@@ -19,6 +19,13 @@ CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
 
 
+def detect_language(text):
+    persian_chars = set("ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی")
+    if any(c in persian_chars for c in text):
+        return "Persian"
+    return "English"
+
+
 def extract_text_from_upload(uploaded_file):
     name = uploaded_file.name.lower()
     content = uploaded_file.read()
@@ -101,6 +108,14 @@ def rag_query(question, embedder, index, chunks, top_k=3):
         [f"[Source: {c['source']}, page/paragraph {c['page']}]\n{c['text']}" for c in retrieved]
     )
 
+    lang = detect_language(question)
+    lang_instruction = (
+        "The user's question is in English. You MUST answer in English, "
+        "even if the retrieved text is in Persian. Translate the answer to English."
+        if lang == "English"
+        else "The user's question is in Persian. Answer in Persian."
+    )
+
     headers = {
         "Authorization": f"Bearer {CF_API_TOKEN}",
         "Content-Type": "application/json",
@@ -110,15 +125,15 @@ def rag_query(question, embedder, index, chunks, top_k=3):
         "messages": [
             {
                 "role": "system",
-                "content": "You are an assistant that answers ONLY from the provided text. "
-                           "If the answer is not in the text, say exactly 'Not in text' "
-                           "(in the same language as the question). "
-                           "Answer in the same language as the question. "
-                           "At the end, cite the source (file name and page/paragraph).",
+                "content": f"You are an assistant that answers ONLY from the provided text. "
+                           f"If the answer is not in the text, say exactly 'Not in text' "
+                           f"(in {lang}). "
+                           f"{lang_instruction} "
+                           f"At the end, cite the source (file name and page/paragraph).",
             },
             {
                 "role": "user",
-                "content": f"Text:\n{context}\n\nQuestion: {question}\n\nAnswer:",
+                "content": f"Text:\n{context}\n\nQuestion: {question}\n\nAnswer ({lang}):",
             },
         ],
     }
