@@ -9,8 +9,8 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
-st.title("🤖 دستیار RAG — پرسش از سند")
-st.caption("فایل PDF یا TXT خودت را آپلود کن، یا از سند پیش‌فرض استفاده کن.")
+st.title("🤖 RAG PDF Assistant — دستیار RAG")
+st.caption("Ask in English or Persian — the assistant answers in the same language.")
 
 # --- کلیدها ---
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
@@ -98,7 +98,7 @@ def rag_query(question, embedder, index, chunks, top_k=3):
     distances, indices = index.search(q_emb, top_k)
     retrieved = [chunks[i] for i in indices[0]]
     context = "\n\n".join(
-        [f"[منبع: {c['source']}، بخش {c['page']}]\n{c['text']}" for c in retrieved]
+        [f"[Source: {c['source']}, page/paragraph {c['page']}]\n{c['text']}" for c in retrieved]
     )
 
     headers = {
@@ -110,19 +110,21 @@ def rag_query(question, embedder, index, chunks, top_k=3):
         "messages": [
             {
                 "role": "system",
-                "content": "تو یک دستیار هستی که فقط بر اساس متن داده‌شده جواب می‌دهد. "
-                           "اگر جواب در متن نبود، دقیقاً بگو «در متن نیست». "
-                           "همیشه فارسی جواب بده و در پایان، منبع را ذکر کن.",
+                "content": "You are an assistant that answers ONLY from the provided text. "
+                           "If the answer is not in the text, say exactly 'Not in text' "
+                           "(in the same language as the question). "
+                           "Answer in the same language as the question. "
+                           "At the end, cite the source (file name and page/paragraph).",
             },
             {
                 "role": "user",
-                "content": f"متن:\n{context}\n\nسوال: {question}\n\nجواب:",
+                "content": f"Text:\n{context}\n\nQuestion: {question}\n\nAnswer:",
             },
         ],
     }
     response = requests.post(CF_URL, headers=headers, json=payload, timeout=60)
     if response.status_code != 200:
-        return f"خطای API (کد {response.status_code}): {response.text}", []
+        return f"API error (code {response.status_code}): {response.text}", []
 
     result = response.json()
     answer = result["choices"][0]["message"]["content"]
@@ -131,9 +133,9 @@ def rag_query(question, embedder, index, chunks, top_k=3):
 
 
 # --- انتخاب سند از سایدبار ---
-st.sidebar.header("📂 سند خودت را انتخاب کن")
+st.sidebar.header("📂 Select your document / سند خودت را انتخاب کن")
 uploaded_file = st.sidebar.file_uploader(
-    "فایل PDF یا TXT آپلود کن (اختیاری)", type=["pdf", "txt"]
+    "Upload PDF or TXT (optional)", type=["pdf", "txt"]
 )
 
 if uploaded_file is not None:
@@ -144,17 +146,17 @@ else:
     doc_key = "default"
 
 if doc is None or not doc["pages"]:
-    st.error("هیچ سند معتبری یافت نشد.")
+    st.error("No valid document found. / هیچ سند معتبری یافت نشد.")
     st.stop()
 
 pages_json = json.dumps(doc["pages"], ensure_ascii=False)
 
-with st.spinner(f"در حال ساختن پایگاه برداری از «{doc['name']}»..."):
+with st.spinner(f"Building vector index from «{doc['name']}»..."):
     embedder, index, chunks = build_index(doc_key, doc["name"], pages_json)
 
-st.success(f"✅ آماده است — {len(chunks)} قطعه از «{doc['name']}» ایندکس شد.")
+st.success(f"✅ Ready — {len(chunks)} chunks indexed from «{doc['name']}»")
 
-# --- حافظه چت (اگر سند عوض شد، پاک شود) ---
+# --- حافظه چت ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if st.session_state.get("current_doc_key") != doc_key:
@@ -165,19 +167,19 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("سوال خودت را بنویس..."):
+if prompt := st.chat_input("Ask a question... / سوال خودت را بنویس..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("در حال فکر کردن..."):
+        with st.spinner("Thinking... / در حال فکر کردن..."):
             answer, sources = rag_query(prompt, embedder, index, chunks)
-        if "در متن نیست" in answer:
+        if ("Not in text" in answer) or ("در متن نیست" in answer):
             full = f"❌ {answer}"
         else:
             src_text = "\n".join([f"📄 {s}، بخش {p}" for s, p in sources])
-            full = f"{answer}\n\n---\n**منابع:**\n{src_text}"
+            full = f"{answer}\n\n---\n**Sources / منابع:**\n{src_text}"
         st.markdown(full)
 
     st.session_state.messages.append({"role": "assistant", "content": full})
