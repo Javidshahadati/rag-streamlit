@@ -33,18 +33,26 @@ Upload your own PDF or TXT and ask questions — the assistant answers only from
 ۷. نزدیک‌ترین قطعه‌ها به مدل زبانی داده می‌شود.
 ۸. مدل فقط بر اساس متن جواب می‌دهد + منبع.
 
-## 📊 نتایج تست
+## 📊 نتایج تست (فارسی)
 | سند | سوال | نتیجه |
 |-----|-------|--------|
 | ai-text.txt | Transformer چیست؟ | ✅ جواب درست + منبع |
-| ai-text.txt | پایتخت فرانسه کجاست؟ | ✅ «در متن نیست» |
+| ai-text.txt | پایتخت فرانسه کجاست؟ | ✅ «در متن نیست» (۰ توهم) |
 | مقاله GPR (۲۱ قطعه) | موضوع این مقاله چیست؟ | ✅ جواب درست + منبع |
+
+## 📊 English test
+| Document | Question | Result |
+|----------|----------|--------|
+| ai-text.txt | What is Transformer? | ✅ Correct answer + source |
+| ai-text.txt | What is the capital of France? | ✅ "Not in text" (0 hallucination) |
+| GPR research paper (21 chunks) | What is this paper about? | ✅ Correct answer + source |
 
 ## 📝 درس‌های گرفته‌شده
 - استفاده از API به جای مدل محلی، محدودیت RAM را حل کرد.
 - Streamlit Secrets برای امنیت کلیدها ضروری است.
 - مدل‌های Cloudflare گاهی منقضی می‌شوند و باید به‌روز شوند.
 - استخراج متن از PDF فارسی گاهی به‌هم‌ریخته است — برای متن‌های مهم، TXT بهتر است.
+- مدل Llama 3.1 چندزبانه است و به هر زبانی که سوال بپرسی، همان زبان جواب می‌دهد.
 
 ## 👤 نویسنده
 Javid Shahadati
