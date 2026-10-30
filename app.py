@@ -7,6 +7,7 @@ import numpy as np
 import faiss
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
+from rank_bm25 import BM25Okapi
 
 st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
 st.title("🤖 RAG PDF Assistant — دستیار RAG")
@@ -97,13 +98,44 @@ def build_index(doc_key, doc_name, pages_json):
 
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
-    return embedder, index, chunks
+
+    # --- ساخت BM25 برای جستجوی کلیدواژه ---
+    tokenized_chunks = [c["text"].split() for c in chunks]
+    bm25 = BM25Okapi(tokenized_chunks)
+
+    return embedder, index, chunks, bm25
 
 
-def rag_query(question, embedder, index, chunks, top_k=3):
+def hybrid_search(question, embedder, index, chunks, bm25, top_k=3, alpha=0.5):
+    """ترکیب جستجوی برداری و کلیدواژه"""
+    # ۱. جستجوی برداری
     q_emb = embedder.encode([question], convert_to_numpy=True)
-    distances, indices = index.search(q_emb, top_k)
-    retrieved = [chunks[i] for i in indices[0]]
+    distances, indices = index.search(q_emb, top_k * 2)
+    vector_scores = {}
+    for rank, idx in enumerate(indices[0]):
+        vector_scores[int(idx)] = 1 / (rank + 1)
+
+    # ۲. جستجوی کلیدواژه
+    tokenized_query = question.split()
+    bm25_scores_arr = bm25.get_scores(tokenized_query)
+    bm25_top = bm25_scores_arr.argsort()[::-1][:top_k * 2]
+    keyword_scores = {}
+    for rank, idx in enumerate(bm25_top):
+        keyword_scores[int(idx)] = 1 / (rank + 1)
+
+    # ۳. ترکیب امتیازها
+    all_indices = set(vector_scores) | set(keyword_scores)
+    combined = {}
+    for idx in all_indices:
+        combined[idx] = alpha * vector_scores.get(idx, 0) + (1 - alpha) * keyword_scores.get(idx, 0)
+
+    # ۴. انتخاب بهترین‌ها
+    sorted_idx = sorted(combined, key=combined.get, reverse=True)[:top_k]
+    return [chunks[i] for i in sorted_idx]
+
+
+def rag_query(question, embedder, index, chunks, bm25, top_k=3):
+    retrieved = hybrid_search(question, embedder, index, chunks, bm25, top_k=top_k)
     context = "\n\n".join(
         [f"[Source: {c['source']}, page/paragraph {c['page']}]\n{c['text']}" for c in retrieved]
     )
@@ -167,9 +199,9 @@ if doc is None or not doc["pages"]:
 pages_json = json.dumps(doc["pages"], ensure_ascii=False)
 
 with st.spinner(f"Building vector index from «{doc['name']}»..."):
-    embedder, index, chunks = build_index(doc_key, doc["name"], pages_json)
+    embedder, index, chunks, bm25 = build_index(doc_key, doc["name"], pages_json)
 
-st.success(f"✅ Ready — {len(chunks)} chunks indexed from «{doc['name']}»")
+st.success(f"✅ Ready — {len(chunks)} chunks indexed from «{doc['name']}» (Hybrid Search enabled)")
 
 # --- حافظه چت ---
 if "messages" not in st.session_state:
@@ -189,7 +221,7 @@ if prompt := st.chat_input("Ask a question... / سوال خودت را بنوی�
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking... / در حال فکر کردن..."):
-            answer, sources = rag_query(prompt, embedder, index, chunks)
+            answer, sources = rag_query(prompt, embedder, index, chunks, bm25)
         if ("Not in text" in answer) or ("در متن نیست" in answer):
             full = f"❌ {answer}"
         else:
