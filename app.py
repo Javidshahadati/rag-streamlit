@@ -21,7 +21,6 @@ APP_BASE_URL = "https://javid-rag-assistant.streamlit.app"
 # Share helpers
 # ============================================================
 def encode_share(messages):
-    """پیام‌ها رو به توکن URL-safe تبدیل می‌کنه (بدون چانک‌های سنگین)"""
     slim = []
     for m in messages:
         slim.append({
@@ -36,7 +35,6 @@ def encode_share(messages):
 
 
 def decode_share(token):
-    """توکن رو برمی‌گردونه به لیست پیام‌ها"""
     try:
         padding = 4 - len(token) % 4
         if padding != 4:
@@ -49,7 +47,7 @@ def decode_share(token):
 
 
 # ============================================================
-# Shared view — اگه URL شامل ?share= بود، فقط گفتگو رو نشون بده
+# Shared view
 # ============================================================
 share_token = None
 try:
@@ -63,8 +61,8 @@ except (AttributeError, KeyError):
 if share_token:
     shared = decode_share(share_token)
     if shared:
-        st.title("🔗 گفتگوی اشتراک‌گذاری‌شده / Shared Conversation")
-        st.caption("این گفتگو فقط خواندنی است.")
+        st.title("🔗 Shared Conversation")
+        st.caption("این گفتگو فقط خواندنی است / Read-only")
         st.markdown(f"[🔄 رفتن به اپ اصلی / Go to main app]({APP_BASE_URL})")
         st.divider()
         for msg in shared:
@@ -81,6 +79,9 @@ if share_token:
         st.stop()
 
 
+# ============================================================
+# برند
+# ============================================================
 st.markdown("""
 <style>
     .brand-title {
@@ -112,10 +113,8 @@ st.markdown("""
 
 st.markdown('<div class="brand-title">Javid RAG</div>', unsafe_allow_html=True)
 st.markdown(
-st.markdown(
     '<div class="brand-tagline">Ask your documents. Get answers. Zero hallucinations.</div>',
     unsafe_allow_html=True
-)
 )
 st.markdown(
     '<span class="brand-badge">🔒 Zero hallucinations</span>'
@@ -124,6 +123,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 st.divider()
+
 
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
@@ -530,22 +530,24 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
     return answer.strip(), sources, details
 
 
-# --- سایدبار ---
+# ============================================================
+# سایدبار
+# ============================================================
 st.sidebar.header("📂 Select your document / سند خودت را انتخاب کن")
 uploaded_file = st.sidebar.file_uploader("Upload PDF or TXT (optional)", type=["pdf", "txt"])
 use_expansion = st.sidebar.checkbox("Enable Multi-Query Expansion", value=True)
 
 
 # ============================================================
-# About / درباره
+# About
 # ============================================================
 st.sidebar.divider()
-with st.sidebar.expander("ℹ️ About DocuSage"):
+with st.sidebar.expander("ℹ️ About Javid RAG"):
     st.markdown(
         """
-**DocuSage** answers questions from **your** documents — and only your documents.
+**Javid RAG** answers questions from **your** documents — and only your documents.
 
-### 🎯 Why DocuSage?
+### 🎯 Why Javid RAG?
 - 📄 **Upload any PDF or TXT** — ask in Persian or English
 - 🎯 **Zero hallucinations** — if the answer isn't in the document, it says so
 - 🔍 **Full transparency** — see exactly which chunks answered your question
@@ -564,6 +566,8 @@ Validated on 50 test questions — zero hallucinations on out-of-doc queries.
 Javid Shahadati — RAG Specialist
         """
     )
+
+
 if uploaded_file is not None:
     doc = extract_text_from_upload(uploaded_file)
     doc_key = f"upload_{uploaded_file.name}_{uploaded_file.size}"
@@ -586,7 +590,7 @@ st.success(
 )
 
 # ============================================================
-# بخش خلاصه
+# خلاصه
 # ============================================================
 st.markdown("### 📝 خلاصه‌ی سند / Document Summary")
 
@@ -710,7 +714,7 @@ if st.session_state.get("current_doc_key") != doc_key:
     st.session_state.show_share = False
 
 # ============================================================
-# NEW (قدم ۵): Chat actions — download / share / clear
+# Chat actions
 # ============================================================
 if st.session_state.messages:
     st.markdown("### 💬 گفتگو / Conversation")
@@ -747,7 +751,7 @@ if st.session_state.messages:
 
     if st.session_state.get("show_share") and st.session_state.get("share_url"):
         st.code(st.session_state.share_url, language="text")
-        st.caption(f"طول لینک: **{len(st.session_state.share_url)}** کاراکتر — کپی کن و هر جا خواستی بفرست")
+        st.caption(f"طول لینک: **{len(st.session_state.share_url)}** کاراکتر")
         if len(st.session_state.share_url) > 8000:
             st.warning("⚠️ لینک بلند است. اگه باز نشد، پیام‌های کمتری رو به اشتراک بذار.")
 
@@ -821,5 +825,5 @@ if prompt:
         "confidence": details.get("confidence"),
         "chunks": details.get("chunks", []),
     })
-    st.session_state.show_share = False  # لینک قدیمی رو مخفی کن
+    st.session_state.show_share = False
     st.rerun()
