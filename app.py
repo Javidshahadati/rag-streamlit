@@ -43,7 +43,7 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
 
 
 # ============================================================
-# خلاصه‌ساز — نسخه‌ی ۳ call جدا (ضدگلوله)
+# خلاصه‌ساز — نسخه‌ی ۳ call جدا
 # ============================================================
 def summarize_document(full_text, lang):
     if not full_text or len(full_text.strip()) < 100:
@@ -54,7 +54,6 @@ def summarize_document(full_text, lang):
     text = full_text[:MAX_CHARS]
     raw_log = []
 
-    # --- Call 1: TL;DR ---
     tldr_prompt = (
         f"Summarize the document below in ONE sentence (max 25 words) in {lang_name}. "
         f"Only use information from the text. No preamble, no labels, just the sentence.\n\n"
@@ -69,7 +68,6 @@ def summarize_document(full_text, lang):
         tldr = f"خطا در خلاصه‌سازی: {e}"
         raw_log.append(f"[TLDR ERROR] {e}")
 
-    # --- Call 2: Medium ---
     medium_prompt = (
         f"Write a paragraph of 4-5 sentences summarizing the main points of the document in {lang_name}. "
         f"Only use information from the text. No preamble, just the paragraph.\n\n"
@@ -82,7 +80,6 @@ def summarize_document(full_text, lang):
         medium = f"خطا: {e}"
         raw_log.append(f"[MEDIUM ERROR] {e}")
 
-    # --- Call 3: Bullets ---
     bullets_prompt = (
         f"Extract exactly 5 key points from the document below. Write in {lang_name}. "
         f"Return ONLY 5 lines, each starting with '- '. "
@@ -297,7 +294,10 @@ def multi_query_search(question, embedder, index, chunks, bm25, top_k=6, use_exp
     return [r["chunk"] for r in ranked[:top_k]]
 
 
-def rerank_maxsim(question, candidates, embedder, top_k=3):
+# ============================================================
+# NEW: rerank با score برمی‌گردونه
+# ============================================================
+def rerank_maxsim_scored(question, candidates, embedder, top_k=3):
     q_emb = embedder.encode([question], convert_to_numpy=True)[0]
     q_norm = np.linalg.norm(q_emb) + 1e-8
 
@@ -314,7 +314,11 @@ def rerank_maxsim(question, candidates, embedder, top_k=3):
         scored.append((c, max_sim))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    return [c for c, _ in scored[:top_k]]
+    return scored[:top_k]
+
+
+def rerank_maxsim(question, candidates, embedder, top_k=3):
+    return [c for c, _ in rerank_maxsim_scored(question, candidates, embedder, top_k)]
 
 
 def build_search_query(question, history):
@@ -338,6 +342,9 @@ def build_search_query(question, history):
     return question
 
 
+# ============================================================
+# rag_query — الان ۳ چیز برمی‌گردونه: (answer, sources, details)
+# ============================================================
 def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansion=True):
     history = history or []
     search_query = build_search_query(question, history)
@@ -345,7 +352,8 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
     candidates = multi_query_search(
         search_query, embedder, index, chunks, bm25, top_k=6, use_expansion=use_expansion
     )
-    retrieved = rerank_maxsim(search_query, candidates, embedder, top_k=3)
+    scored_chunks = rerank_maxsim_scored(search_query, candidates, embedder, top_k=3)
+    retrieved = [c for c, _ in scored_chunks]
 
     context = "\n\n".join(
         [f"[Source: {c['source']}, page/paragraph {c['page']}]\n{c['text']}" for c in retrieved]
@@ -388,12 +396,30 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
 
     response = requests.post(CF_URL, headers=headers, json=payload, timeout=60)
     if response.status_code != 200:
-        return f"API error (code {response.status_code}): {response.text}", []
+        return f"API error (code {response.status_code}): {response.text}", [], {"chunks": [], "confidence": 0}
 
     result = response.json()
     answer = result["choices"][0]["message"]["content"]
     sources = list({(c["source"], c["page"]) for c in retrieved})
-    return answer.strip(), sources
+
+    # امتیاز اطمینان
+    is_not_in_text = ("Not in text" in answer) or ("در متن نیست" in answer)
+    if is_not_in_text or not scored_chunks:
+        confidence = 0
+    else:
+        scores = [s for _, s in scored_chunks]
+        avg_score = sum(scores) / len(scores)
+        confidence = round(min(99, max(10, avg_score * 100)))
+
+    details = {
+        "chunks": [
+            {"text": c["text"], "page": c["page"], "source": c["source"], "score": round(s, 3)}
+            for c, s in scored_chunks
+        ],
+        "confidence": confidence,
+    }
+
+    return answer.strip(), sources, details
 
 
 # --- سایدبار ---
@@ -450,7 +476,6 @@ if st.session_state.get("summary"):
                 st.markdown(f"- {b}")
         else:
             st.write("—")
-    # دیباگ
     with st.expander("🔍 Debug (خروجی خام مدل)", expanded=False):
         st.code(s.get("raw", ""), language="text")
 
@@ -502,7 +527,7 @@ with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
         correct_in = total_in = correct_out = total_out = hallucinations = 0
 
         for tc in test_cases:
-            answer, sources = rag_query(
+            answer, sources, _ = rag_query(
                 tc["question"], embedder, index, chunks, bm25,
                 history=[], use_expansion=use_expansion
             )
@@ -545,9 +570,43 @@ if st.session_state.get("current_doc_key") != doc_key:
     st.session_state.messages = []
     st.session_state.current_doc_key = doc_key
 
-for msg in st.session_state.messages:
+# ============================================================
+# نمایش تاریخچه با confidence + why + 👎
+# ============================================================
+def render_assistant_extras(idx, msg):
+    """امتیاز اطمینان + دکمه‌ی چرا + 👎 برای هر پیام assistant"""
+    conf = msg.get("confidence")
+    if conf is not None:
+        if conf >= 70:
+            st.caption(f"🟢 اطمینان: **{conf}%**")
+        elif conf >= 40:
+            st.caption(f"🟡 اطمینان: **{conf}%**")
+        else:
+            st.caption(f"🔴 اطمینان: **{conf}%**")
+
+    chunks_meta = msg.get("chunks", [])
+    if chunks_meta:
+        with st.expander("🔍 چرا این جواب؟ (بخش‌های بازیابی‌شده)", expanded=False):
+            for k, ch in enumerate(chunks_meta):
+                st.markdown(
+                    f"**بخش {k+1} — صفحه {ch['page']} — امتیاز: `{ch['score']}`**"
+                )
+                st.caption(ch["text"][:400] + ("..." if len(ch["text"]) > 400 else ""))
+
+    fb_key = f"fb_{idx}"
+    if st.session_state.get(fb_key) == "down":
+        st.caption("👎 ثبت شد — ممنون از بازخوردت!")
+    else:
+        if st.button("👎 جواب اشتباه بود", key=f"btn_{fb_key}"):
+            st.session_state[fb_key] = "down"
+            st.rerun()
+
+
+for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg["role"] == "assistant":
+            render_assistant_extras(i, msg)
 
 # --- ورودی چت ---
 prompt_input = st.chat_input("Ask a question... / سوال خودت را بنویس...")
@@ -557,12 +616,13 @@ prompt = pending or prompt_input
 if prompt:
     history_before = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking... / در حال فکر کردن..."):
-            answer, sources = rag_query(
+            answer, sources, details = rag_query(
                 prompt, embedder, index, chunks, bm25,
                 history=history_before, use_expansion=use_expansion
             )
@@ -573,4 +633,12 @@ if prompt:
             full = f"{answer}\n\n---\n**Sources / منابع:**\n{src_text}"
         st.markdown(full)
 
-    st.session_state.messages.append({"role": "assistant", "content": full})
+    # ذخیره با metadata
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": full,
+        "confidence": details.get("confidence"),
+        "chunks": details.get("chunks", []),
+    })
+    # حرکت پیام تازه به حلقه‌ی بالا برای نمایش consistent با دکمه‌ها
+    st.rerun()
