@@ -2,6 +2,8 @@ import os
 import io
 import json
 import re
+import base64
+import zlib
 import streamlit as st
 import requests
 import numpy as np
@@ -11,6 +13,74 @@ from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 
 st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
+
+APP_BASE_URL = "https://javid-rag-assistant.streamlit.app"
+
+
+# ============================================================
+# Share helpers
+# ============================================================
+def encode_share(messages):
+    """پیام‌ها رو به توکن URL-safe تبدیل می‌کنه (بدون چانک‌های سنگین)"""
+    slim = []
+    for m in messages:
+        slim.append({
+            "role": m.get("role"),
+            "content": m.get("content"),
+            "confidence": m.get("confidence"),
+        })
+    data = json.dumps(slim, ensure_ascii=False).encode("utf-8")
+    compressed = zlib.compress(data, level=9)
+    encoded = base64.urlsafe_b64encode(compressed).decode("ascii").rstrip("=")
+    return encoded
+
+
+def decode_share(token):
+    """توکن رو برمی‌گردونه به لیست پیام‌ها"""
+    try:
+        padding = 4 - len(token) % 4
+        if padding != 4:
+            token += "=" * padding
+        compressed = base64.urlsafe_b64decode(token.encode("ascii"))
+        data = zlib.decompress(compressed).decode("utf-8")
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+# ============================================================
+# Shared view — اگه URL شامل ?share= بود، فقط گفتگو رو نشون بده
+# ============================================================
+share_token = None
+try:
+    share_token = st.query_params.get("share")
+except (AttributeError, KeyError):
+    try:
+        share_token = st.experimental_get_query_params().get("share", [None])[0]
+    except Exception:
+        share_token = None
+
+if share_token:
+    shared = decode_share(share_token)
+    if shared:
+        st.title("🔗 گفتگوی اشتراک‌گذاری‌شده / Shared Conversation")
+        st.caption("این گفتگو فقط خواندنی است.")
+        st.markdown(f"[🔄 رفتن به اپ اصلی / Go to main app]({APP_BASE_URL})")
+        st.divider()
+        for msg in shared:
+            with st.chat_message(msg.get("role", "assistant")):
+                st.markdown(msg.get("content", ""))
+                if msg.get("role") == "assistant" and msg.get("confidence") is not None:
+                    conf = msg["confidence"]
+                    emoji = "🟢" if conf >= 70 else ("🟡" if conf >= 40 else "🔴")
+                    st.caption(f"{emoji} اطمینان: **{conf}%**")
+        st.stop()
+    else:
+        st.error("❌ لینک اشتراک نامعتبر است.")
+        st.markdown(f"[🔄 رفتن به اپ اصلی]({APP_BASE_URL})")
+        st.stop()
+
+
 st.title("🤖 RAG PDF Assistant — دستیار RAG")
 st.caption("Ask in English or Persian — the assistant remembers the conversation.")
 
@@ -43,7 +113,7 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
 
 
 # ============================================================
-# خلاصه‌ساز — ۳ call جدا
+# خلاصه‌ساز
 # ============================================================
 def summarize_document(full_text, lang):
     if not full_text or len(full_text.strip()) < 100:
@@ -396,9 +466,6 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
     answer = result["choices"][0]["message"]["content"]
     sources = list({(c["source"], c["page"]) for c in retrieved})
 
-    # ============================================================
-    # امتیاز اطمینان — بر اساس بهترین چانک (نه میانگین همه)
-    # ============================================================
     is_not_in_text = ("Not in text" in answer) or ("در متن نیست" in answer)
     if is_not_in_text or not scored_chunks:
         confidence = 0
@@ -569,10 +636,53 @@ if "messages" not in st.session_state:
 if st.session_state.get("current_doc_key") != doc_key:
     st.session_state.messages = []
     st.session_state.current_doc_key = doc_key
+    st.session_state.share_url = None
+    st.session_state.show_share = False
+
+# ============================================================
+# NEW (قدم ۵): Chat actions — download / share / clear
+# ============================================================
+if st.session_state.messages:
+    st.markdown("### 💬 گفتگو / Conversation")
+    ac1, ac2, ac3 = st.columns(3)
+
+    with ac1:
+        md_lines = [f"# گفتگو / Chat\n\n**Document:** {doc['name']}\n"]
+        for msg in st.session_state.messages:
+            role = "👤 **You**" if msg["role"] == "user" else "🤖 **Assistant**"
+            md_lines.append(f"\n{role}:\n\n{msg.get('content', '')}\n")
+            if msg.get("confidence") is not None:
+                md_lines.append(f"_Confidence: {msg['confidence']}%_\n")
+            md_lines.append("\n---\n")
+        st.download_button(
+            "📥 دانلود / Download",
+            data="\n".join(md_lines).encode("utf-8"),
+            file_name=f"chat_{doc['name'].rsplit('.', 1)[0]}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+
+    with ac2:
+        if st.button("🔗 لینک اشتراک / Share", use_container_width=True):
+            token = encode_share(st.session_state.messages)
+            st.session_state.share_url = f"{APP_BASE_URL}/?share={token}"
+            st.session_state.show_share = True
+
+    with ac3:
+        if st.button("🗑️ پاک کردن / Clear", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.share_url = None
+            st.session_state.show_share = False
+            st.rerun()
+
+    if st.session_state.get("show_share") and st.session_state.get("share_url"):
+        st.code(st.session_state.share_url, language="text")
+        st.caption(f"طول لینک: **{len(st.session_state.share_url)}** کاراکتر — کپی کن و هر جا خواستی بفرست")
+        if len(st.session_state.share_url) > 8000:
+            st.warning("⚠️ لینک بلند است. اگه باز نشد، پیام‌های کمتری رو به اشتراک بذار.")
 
 
 def render_assistant_extras(idx, msg):
-    """امتیاز اطمینان + دکمه‌ی چرا + 👎 برای هر پیام assistant"""
     conf = msg.get("confidence")
     if conf is not None:
         if conf >= 70:
@@ -584,7 +694,6 @@ def render_assistant_extras(idx, msg):
 
     chunks_meta = msg.get("chunks", [])
     if chunks_meta:
-        # فقط چانک‌های مرتبط (>= 0.30) رو نشون بده
         visible = [c for c in chunks_meta if c["score"] >= 0.30]
         if visible:
             with st.expander("🔍 چرا این جواب؟ (بخش‌های بازیابی‌شده)", expanded=False):
@@ -642,4 +751,5 @@ if prompt:
         "confidence": details.get("confidence"),
         "chunks": details.get("chunks", []),
     })
+    st.session_state.show_share = False  # لینک قدیمی رو مخفی کن
     st.rerun()
