@@ -22,9 +22,6 @@ CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/c
 MAX_HISTORY_TURNS = 3
 
 
-# ============================================================
-# NEW (قدم ۱): تابع عمومی برای فراخوانی مدل
-# ============================================================
 def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, temperature=0.3):
     headers = {
         "Authorization": f"Bearer {CF_API_TOKEN}",
@@ -43,6 +40,64 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
     response = requests.post(CF_URL, headers=headers, json=payload, timeout=90)
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
+
+
+# ============================================================
+# NEW (قدم ۲): خلاصه‌ساز سه‌سطحی
+# ============================================================
+def summarize_document(full_text, lang):
+    """سه‌سطحی خلاصه می‌کنه - با پشتیبانی از سند بلند (Map-Reduce)"""
+    if not full_text or len(full_text.strip()) < 100:
+        return {"tldr": "سند خیلی کوتاه است.", "medium": "", "detailed": []}
+
+    MAX_CHARS = 6000
+    lang_name = "Persian" if lang == "Persian" else "English"
+
+    prompt_template = """You are analyzing a document written in {lang}.
+Return ONLY valid JSON (no markdown, no code fences) with exactly this structure:
+{{
+  "tldr": "one sentence, max 25 words, the single most important idea",
+  "medium": "one paragraph, 4-5 sentences covering the main points",
+  "detailed": ["key point 1", "key point 2", "key point 3", "key point 4", "key point 5"]
+}}
+
+Rules:
+- Write everything in {lang}.
+- Only use information from the text below.
+- Be specific: include numbers, names, dates when present.
+- "detailed" must have exactly 5 bullets, one sentence each.
+
+Document text:
+\"\"\"
+{text}
+\"\"\"
+"""
+
+    # اگه سند بلند بود: اول خلاصه‌ی هر بخش، بعد ترکیب
+    if len(full_text) > MAX_CHARS:
+        chunks = [full_text[i:i + MAX_CHARS] for i in range(0, len(full_text), MAX_CHARS)]
+        partials = []
+        for ch in chunks:
+            p = (
+                f"Summarize this in {lang_name} with 4-5 factual bullets. "
+                f"Only use information from the text. No preamble, no intro:\n\n{ch}"
+            )
+            partials.append(cf_generate(p, max_tokens=400, temperature=0.2))
+        full_text = "\n\n".join(partials)
+
+    raw = cf_generate(
+        prompt_template.format(lang=lang_name, text=full_text[:MAX_CHARS]),
+        max_tokens=1200,
+        temperature=0.2,
+    )
+
+    # تمیز کردن JSON
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"tldr": raw[:250], "medium": "", "detailed": []}
 # ============================================================
 
 
@@ -130,7 +185,6 @@ def build_index(doc_key, doc_name, pages_json):
 
 
 def generate_query_variants(question, n=3):
-    """تولید n بازنویسی از سوال با LLM. در صورت خطا، لیست خالی."""
     headers = {
         "Authorization": f"Bearer {CF_API_TOKEN}",
         "Content-Type": "application/json",
@@ -182,7 +236,6 @@ def hybrid_search(question, embedder, index, chunks, bm25, top_k=6, alpha=0.5):
 
 
 def multi_query_search(question, embedder, index, chunks, bm25, top_k=6, use_expansion=True):
-    """جستجو با چند بازنویسی + ترکیب نتایج با RRF"""
     queries = [question]
     if use_expansion:
         variants = generate_query_variants(question, n=3)
@@ -195,7 +248,7 @@ def multi_query_search(question, embedder, index, chunks, bm25, top_k=6, use_exp
             key = (c["source"], c["page"], c["text"][:60])
             if key not in seen:
                 seen[key] = {"chunk": c, "score": 0.0}
-            seen[key]["score"] += 1.0 / (rank + 1)  # Reciprocal Rank Fusion
+            seen[key]["score"] += 1.0 / (rank + 1)
 
     ranked = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
     return [r["chunk"] for r in ranked[:top_k]]
@@ -325,6 +378,33 @@ st.success(
     f"✅ Ready — {len(chunks)} chunks from «{doc['name']}» "
     f"(Hybrid + Multi-Query + Re-ranking + Memory)"
 )
+
+# ============================================================
+# NEW (قدم ۲): بخش خلاصه‌ی سند
+# ============================================================
+st.markdown("### 📝 خلاصه‌ی سند / Document Summary")
+
+# ریست خلاصه وقتی سند عوض می‌شه
+if st.session_state.get("summary_doc_key") != doc_key:
+    st.session_state.summary = None
+    st.session_state.summary_doc_key = doc_key
+
+if st.button("📝 خلاصه کن / Summarize", use_container_width=True):
+    full_text = "\n\n".join([p["text"] for p in doc["pages"]])
+    lang = detect_language(full_text)
+    with st.spinner("در حال خواندن سند... / Reading document..."):
+        st.session_state.summary = summarize_document(full_text, lang)
+
+if st.session_state.get("summary"):
+    s = st.session_state.summary
+    st.markdown("**⚡ TL;DR**")
+    st.info(s.get("tldr", "—"))
+    with st.expander("📄 خلاصه‌ی متوسط / Medium Summary", expanded=False):
+        st.write(s.get("medium", "—"))
+    with st.expander("📚 نکات کلیدی / Detailed Summary", expanded=False):
+        for b in s.get("detailed", []):
+            st.markdown(f"- {b}")
+# ============================================================
 
 # --- ارزیابی ---
 with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
