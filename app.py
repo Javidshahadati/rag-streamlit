@@ -43,67 +43,71 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
 
 
 # ============================================================
-# خلاصه‌ساز سه‌سطحی — نسخه‌ی فیکس‌شده (خطی، نه JSON)
+# خلاصه‌ساز — نسخه‌ی ۳ call جدا (ضدگلوله)
 # ============================================================
 def summarize_document(full_text, lang):
     if not full_text or len(full_text.strip()) < 100:
-        return {"tldr": "سند خیلی کوتاه است.", "medium": "", "detailed": []}
+        return {"tldr": "سند خیلی کوتاه است.", "medium": "", "detailed": [], "raw": ""}
 
     MAX_CHARS = 6000
     lang_name = "Persian" if lang == "Persian" else "English"
+    text = full_text[:MAX_CHARS]
+    raw_log = []
 
-    prompt = f"""Analyze the document below and respond EXACTLY in this format (in {lang_name}):
-
-TLDR: <one sentence, max 25 words>
-MEDIUM: <one paragraph, 4-5 sentences>
-BULLET: <key point 1>
-BULLET: <key point 2>
-BULLET: <key point 3>
-BULLET: <key point 4>
-BULLET: <key point 5>
-
-Rules:
-- Write everything in {lang_name}.
-- Only use information from the text.
-- No JSON, no markdown, no code fences, no preamble before TLDR:.
-- Each line starts with exactly TLDR:, MEDIUM:, or BULLET:.
-- Do NOT translate markers. Keep "TLDR:", "MEDIUM:", "BULLET:" in English.
-
-Document:
-\"\"\"
-{full_text[:MAX_CHARS]}
-\"\"\"
-"""
+    # --- Call 1: TL;DR ---
+    tldr_prompt = (
+        f"Summarize the document below in ONE sentence (max 25 words) in {lang_name}. "
+        f"Only use information from the text. No preamble, no labels, just the sentence.\n\n"
+        f"Document:\n\"\"\"\n{text}\n\"\"\""
+    )
     try:
-        raw = cf_generate(prompt, max_tokens=1200, temperature=0.2)
+        tldr = cf_generate(tldr_prompt, max_tokens=100, temperature=0.2).strip()
+        tldr = re.sub(r'^(TLDR|TL;DR|Summary|خلاصه)\s*:?\s*', '', tldr, flags=re.IGNORECASE).strip()
+        tldr = tldr.strip('"').strip("'").strip()
+        raw_log.append(f"[TLDR] {tldr[:200]}")
     except Exception as e:
-        return {"tldr": f"خطا در تماس با مدل: {e}", "medium": "", "detailed": []}
+        tldr = f"خطا در خلاصه‌سازی: {e}"
+        raw_log.append(f"[TLDR ERROR] {e}")
 
-    result = {"tldr": "", "medium": "", "detailed": []}
-    for line in raw.split("\n"):
-        line = line.strip()
-        up = line.upper()
-        if up.startswith("TLDR:") or up.startswith("TL;DR:"):
-            result["tldr"] = line.split(":", 1)[1].strip()
-        elif up.startswith("MEDIUM:"):
-            result["medium"] = line.split(":", 1)[1].strip()
-        elif up.startswith("BULLET:"):
-            b = line.split(":", 1)[1].strip()
-            if b:
-                result["detailed"].append(b)
-        elif up.startswith(("-", "•", "*")) and len(result["detailed"]) < 5:
-            b = line.lstrip("-•* ").strip()
-            if b:
-                result["detailed"].append(b)
+    # --- Call 2: Medium ---
+    medium_prompt = (
+        f"Write a paragraph of 4-5 sentences summarizing the main points of the document in {lang_name}. "
+        f"Only use information from the text. No preamble, just the paragraph.\n\n"
+        f"Document:\n\"\"\"\n{text}\n\"\"\""
+    )
+    try:
+        medium = cf_generate(medium_prompt, max_tokens=500, temperature=0.2).strip()
+        raw_log.append(f"[MEDIUM] {medium[:200]}")
+    except Exception as e:
+        medium = f"خطا: {e}"
+        raw_log.append(f"[MEDIUM ERROR] {e}")
 
-    if not result["tldr"] and not result["medium"] and not result["detailed"]:
-        result["tldr"] = raw[:250]
+    # --- Call 3: Bullets ---
+    bullets_prompt = (
+        f"Extract exactly 5 key points from the document below. Write in {lang_name}. "
+        f"Return ONLY 5 lines, each starting with '- '. "
+        f"One sentence per point. Only use information from the text. No preamble.\n\n"
+        f"Document:\n\"\"\"\n{text}\n\"\"\""
+    )
+    try:
+        bullets_raw = cf_generate(bullets_prompt, max_tokens=600, temperature=0.2)
+        detailed = []
+        for line in bullets_raw.split("\n"):
+            line = line.strip()
+            line = re.sub(r'^[\-\*•\d\.\)\s]+', '', line).strip()
+            if line and len(line) > 10:
+                detailed.append(line)
+        detailed = detailed[:5]
+        raw_log.append(f"[BULLETS] {len(detailed)} bullets extracted")
+    except Exception as e:
+        detailed = []
+        raw_log.append(f"[BULLETS ERROR] {e}")
 
-    return result
+    return {"tldr": tldr, "medium": medium, "detailed": detailed, "raw": "\n".join(raw_log)}
 
 
 # ============================================================
-# سوال‌ساز از سند
+# سوال‌ساز
 # ============================================================
 def generate_suggested_questions(full_text, lang, n=5):
     if not full_text or len(full_text.strip()) < 100:
@@ -419,7 +423,7 @@ st.success(
 )
 
 # ============================================================
-# بخش خلاصه‌ی سند
+# بخش خلاصه
 # ============================================================
 st.markdown("### 📝 خلاصه‌ی سند / Document Summary")
 
@@ -430,7 +434,7 @@ if st.session_state.get("summary_doc_key") != doc_key:
 if st.button("📝 خلاصه کن / Summarize", use_container_width=True):
     full_text = "\n\n".join([p["text"] for p in doc["pages"]])
     lang = detect_language(full_text)
-    with st.spinner("در حال خواندن سند... / Reading document..."):
+    with st.spinner("در حال ساخت خلاصه (۳ درخواست به مدل)..."):
         st.session_state.summary = summarize_document(full_text, lang)
 
 if st.session_state.get("summary"):
@@ -446,9 +450,12 @@ if st.session_state.get("summary"):
                 st.markdown(f"- {b}")
         else:
             st.write("—")
+    # دیباگ
+    with st.expander("🔍 Debug (خروجی خام مدل)", expanded=False):
+        st.code(s.get("raw", ""), language="text")
 
 # ============================================================
-# سوالات پیشنهادی — نسخه‌ی فیکس‌شده (retry + دکمه‌ی همیشه فعال)
+# سوالات پیشنهادی
 # ============================================================
 st.markdown("### 💡 سوالات پیشنهادی / Suggested Questions")
 
@@ -457,7 +464,6 @@ if st.session_state.get("questions_doc_key") != doc_key:
     st.session_state.questions_attempts = 0
     st.session_state.questions_doc_key = doc_key
 
-# تلاش خودکار حداکثر ۲ بار
 if (not st.session_state.get("suggested_questions")) and st.session_state.get("questions_attempts", 0) < 2:
     full_text = "\n\n".join([p["text"] for p in doc["pages"]])
     lang = detect_language(full_text)
@@ -476,7 +482,6 @@ if st.session_state.get("suggested_questions"):
 else:
     st.warning("سوالی ساخته نشد. روی دکمه زیر بزن.")
 
-# این دکمه همیشه نمایش داده می‌شه (حتی اگه لیست خالی باشه)
 if st.button("🔄 سوالات جدید", key="regen_qs"):
     st.session_state.suggested_questions = None
     st.session_state.questions_attempts = 0
