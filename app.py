@@ -22,6 +22,30 @@ CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/c
 MAX_HISTORY_TURNS = 3
 
 
+# ============================================================
+# NEW (قدم ۱): تابع عمومی برای فراخوانی مدل
+# ============================================================
+def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, temperature=0.3):
+    headers = {
+        "Authorization": f"Bearer {CF_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    payload = {
+        "model": CF_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    response = requests.post(CF_URL, headers=headers, json=payload, timeout=90)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+# ============================================================
+
+
 def detect_language(text):
     persian_chars = set("ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی")
     return "Persian" if any(c in persian_chars for c in text) else "English"
