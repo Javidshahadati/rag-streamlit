@@ -43,7 +43,7 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
 
 
 # ============================================================
-# خلاصه‌ساز سه‌سطحی
+# خلاصه‌ساز سه‌سطحی — نسخه‌ی فیکس‌شده (خطی، نه JSON)
 # ============================================================
 def summarize_document(full_text, lang):
     if not full_text or len(full_text.strip()) < 100:
@@ -52,49 +52,54 @@ def summarize_document(full_text, lang):
     MAX_CHARS = 6000
     lang_name = "Persian" if lang == "Persian" else "English"
 
-    prompt_template = """You are analyzing a document written in {lang}.
-Return ONLY valid JSON (no markdown, no code fences) with exactly this structure:
-{{
-  "tldr": "one sentence, max 25 words, the single most important idea",
-  "medium": "one paragraph, 4-5 sentences covering the main points",
-  "detailed": ["key point 1", "key point 2", "key point 3", "key point 4", "key point 5"]
-}}
+    prompt = f"""Analyze the document below and respond EXACTLY in this format (in {lang_name}):
+
+TLDR: <one sentence, max 25 words>
+MEDIUM: <one paragraph, 4-5 sentences>
+BULLET: <key point 1>
+BULLET: <key point 2>
+BULLET: <key point 3>
+BULLET: <key point 4>
+BULLET: <key point 5>
 
 Rules:
-- Write everything in {lang}.
-- Only use information from the text below.
-- Be specific: include numbers, names, dates when present.
-- "detailed" must have exactly 5 bullets, one sentence each.
+- Write everything in {lang_name}.
+- Only use information from the text.
+- No JSON, no markdown, no code fences, no preamble before TLDR:.
+- Each line starts with exactly TLDR:, MEDIUM:, or BULLET:.
+- Do NOT translate markers. Keep "TLDR:", "MEDIUM:", "BULLET:" in English.
 
-Document text:
+Document:
 \"\"\"
-{text}
+{full_text[:MAX_CHARS]}
 \"\"\"
 """
-
-    if len(full_text) > MAX_CHARS:
-        chunks = [full_text[i:i + MAX_CHARS] for i in range(0, len(full_text), MAX_CHARS)]
-        partials = []
-        for ch in chunks:
-            p = (
-                f"Summarize this in {lang_name} with 4-5 factual bullets. "
-                f"Only use information from the text. No preamble, no intro:\n\n{ch}"
-            )
-            partials.append(cf_generate(p, max_tokens=400, temperature=0.2))
-        full_text = "\n\n".join(partials)
-
-    raw = cf_generate(
-        prompt_template.format(lang=lang_name, text=full_text[:MAX_CHARS]),
-        max_tokens=1200,
-        temperature=0.2,
-    )
-
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-    raw = re.sub(r"\s*```$", "", raw)
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"tldr": raw[:250], "medium": "", "detailed": []}
+        raw = cf_generate(prompt, max_tokens=1200, temperature=0.2)
+    except Exception as e:
+        return {"tldr": f"خطا در تماس با مدل: {e}", "medium": "", "detailed": []}
+
+    result = {"tldr": "", "medium": "", "detailed": []}
+    for line in raw.split("\n"):
+        line = line.strip()
+        up = line.upper()
+        if up.startswith("TLDR:") or up.startswith("TL;DR:"):
+            result["tldr"] = line.split(":", 1)[1].strip()
+        elif up.startswith("MEDIUM:"):
+            result["medium"] = line.split(":", 1)[1].strip()
+        elif up.startswith("BULLET:"):
+            b = line.split(":", 1)[1].strip()
+            if b:
+                result["detailed"].append(b)
+        elif up.startswith(("-", "•", "*")) and len(result["detailed"]) < 5:
+            b = line.lstrip("-•* ").strip()
+            if b:
+                result["detailed"].append(b)
+
+    if not result["tldr"] and not result["medium"] and not result["detailed"]:
+        result["tldr"] = raw[:250]
+
+    return result
 
 
 # ============================================================
@@ -431,27 +436,34 @@ if st.button("📝 خلاصه کن / Summarize", use_container_width=True):
 if st.session_state.get("summary"):
     s = st.session_state.summary
     st.markdown("**⚡ TL;DR**")
-    st.info(s.get("tldr", "—"))
+    st.info(s.get("tldr") or "—")
     with st.expander("📄 خلاصه‌ی متوسط / Medium Summary", expanded=False):
-        st.write(s.get("medium", "—"))
+        st.write(s.get("medium") or "—")
     with st.expander("📚 نکات کلیدی / Detailed Summary", expanded=False):
-        for b in s.get("detailed", []):
-            st.markdown(f"- {b}")
+        bullets = s.get("detailed") or []
+        if bullets:
+            for b in bullets:
+                st.markdown(f"- {b}")
+        else:
+            st.write("—")
 
 # ============================================================
-# سوالات پیشنهادی
+# سوالات پیشنهادی — نسخه‌ی فیکس‌شده (retry + دکمه‌ی همیشه فعال)
 # ============================================================
 st.markdown("### 💡 سوالات پیشنهادی / Suggested Questions")
 
 if st.session_state.get("questions_doc_key") != doc_key:
     st.session_state.suggested_questions = None
+    st.session_state.questions_attempts = 0
     st.session_state.questions_doc_key = doc_key
 
-if st.session_state.get("suggested_questions") is None:
+# تلاش خودکار حداکثر ۲ بار
+if (not st.session_state.get("suggested_questions")) and st.session_state.get("questions_attempts", 0) < 2:
     full_text = "\n\n".join([p["text"] for p in doc["pages"]])
     lang = detect_language(full_text)
     with st.spinner("در حال ساخت سوالات پیشنهادی..."):
         st.session_state.suggested_questions = generate_suggested_questions(full_text, lang)
+    st.session_state.questions_attempts = st.session_state.get("questions_attempts", 0) + 1
 
 if st.session_state.get("suggested_questions"):
     qs = st.session_state.suggested_questions
@@ -461,9 +473,14 @@ if st.session_state.get("suggested_questions"):
             if st.button(q, key=f"sugg_q_{i}", use_container_width=True):
                 st.session_state.pending_question = q
                 st.rerun()
-    if st.button("🔄 سوالات جدید", key="regen_qs"):
-        st.session_state.suggested_questions = None
-        st.rerun()
+else:
+    st.warning("سوالی ساخته نشد. روی دکمه زیر بزن.")
+
+# این دکمه همیشه نمایش داده می‌شه (حتی اگه لیست خالی باشه)
+if st.button("🔄 سوالات جدید", key="regen_qs"):
+    st.session_state.suggested_questions = None
+    st.session_state.questions_attempts = 0
+    st.rerun()
 
 # --- ارزیابی ---
 with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
