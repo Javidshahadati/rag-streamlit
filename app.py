@@ -43,10 +43,9 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
 
 
 # ============================================================
-# NEW (قدم ۲): خلاصه‌ساز سه‌سطحی
+# خلاصه‌ساز سه‌سطحی
 # ============================================================
 def summarize_document(full_text, lang):
-    """سه‌سطحی خلاصه می‌کنه - با پشتیبانی از سند بلند (Map-Reduce)"""
     if not full_text or len(full_text.strip()) < 100:
         return {"tldr": "سند خیلی کوتاه است.", "medium": "", "detailed": []}
 
@@ -73,7 +72,6 @@ Document text:
 \"\"\"
 """
 
-    # اگه سند بلند بود: اول خلاصه‌ی هر بخش، بعد ترکیب
     if len(full_text) > MAX_CHARS:
         chunks = [full_text[i:i + MAX_CHARS] for i in range(0, len(full_text), MAX_CHARS)]
         partials = []
@@ -91,14 +89,50 @@ Document text:
         temperature=0.2,
     )
 
-    # تمیز کردن JSON
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         return {"tldr": raw[:250], "medium": "", "detailed": []}
+
+
 # ============================================================
+# سوال‌ساز از سند
+# ============================================================
+def generate_suggested_questions(full_text, lang, n=5):
+    if not full_text or len(full_text.strip()) < 100:
+        return []
+
+    lang_name = "Persian" if lang == "Persian" else "English"
+    prompt = f"""Read the following document and generate exactly {n} questions a curious reader would naturally ask.
+
+Rules:
+- Write in {lang_name}.
+- Mix "why", "how", "what is the relationship", and applied questions.
+- AVOID trivial yes/no questions.
+- AVOID questions answerable in one word.
+- Every question MUST be answerable from the text below.
+- Return ONLY the questions, one per line, no numbering, no quotes, no preamble.
+- Each question must end with "?" (or "؟" for Persian).
+
+Document:
+\"\"\"
+{full_text[:6000]}
+\"\"\"
+"""
+    try:
+        raw = cf_generate(prompt, max_tokens=400, temperature=0.6)
+    except Exception:
+        return []
+
+    questions = []
+    for line in raw.split("\n"):
+        line = re.sub(r'^\s*[\d\-\*•\.\)]+\s*', '', line.strip())
+        line = line.strip('"').strip("'").strip()
+        if line and len(line) > 10 and line.endswith(("?", "؟")):
+            questions.append(line)
+    return questions[:n]
 
 
 def detect_language(text):
@@ -380,11 +414,10 @@ st.success(
 )
 
 # ============================================================
-# NEW (قدم ۲): بخش خلاصه‌ی سند
+# بخش خلاصه‌ی سند
 # ============================================================
 st.markdown("### 📝 خلاصه‌ی سند / Document Summary")
 
-# ریست خلاصه وقتی سند عوض می‌شه
 if st.session_state.get("summary_doc_key") != doc_key:
     st.session_state.summary = None
     st.session_state.summary_doc_key = doc_key
@@ -404,7 +437,33 @@ if st.session_state.get("summary"):
     with st.expander("📚 نکات کلیدی / Detailed Summary", expanded=False):
         for b in s.get("detailed", []):
             st.markdown(f"- {b}")
+
 # ============================================================
+# سوالات پیشنهادی
+# ============================================================
+st.markdown("### 💡 سوالات پیشنهادی / Suggested Questions")
+
+if st.session_state.get("questions_doc_key") != doc_key:
+    st.session_state.suggested_questions = None
+    st.session_state.questions_doc_key = doc_key
+
+if st.session_state.get("suggested_questions") is None:
+    full_text = "\n\n".join([p["text"] for p in doc["pages"]])
+    lang = detect_language(full_text)
+    with st.spinner("در حال ساخت سوالات پیشنهادی..."):
+        st.session_state.suggested_questions = generate_suggested_questions(full_text, lang)
+
+if st.session_state.get("suggested_questions"):
+    qs = st.session_state.suggested_questions
+    cols = st.columns(2)
+    for i, q in enumerate(qs):
+        with cols[i % 2]:
+            if st.button(q, key=f"sugg_q_{i}", use_container_width=True):
+                st.session_state.pending_question = q
+                st.rerun()
+    if st.button("🔄 سوالات جدید", key="regen_qs"):
+        st.session_state.suggested_questions = None
+        st.rerun()
 
 # --- ارزیابی ---
 with st.expander("📊 Run Evaluation (in-doc & out-of-doc tests)"):
@@ -469,7 +528,11 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # --- ورودی چت ---
-if prompt := st.chat_input("Ask a question... / سوال خودت را بنویس..."):
+prompt_input = st.chat_input("Ask a question... / سوال خودت را بنویس...")
+pending = st.session_state.pop("pending_question", None)
+prompt = pending or prompt_input
+
+if prompt:
     history_before = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
