@@ -12,7 +12,7 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 
-st.set_page_config(page_title="DocuSage", page_icon="🧠")
+st.set_page_config(page_title="Javid RAG", page_icon="🧠")
 
 APP_BASE_URL = "https://javid-rag-assistant.streamlit.app"
 
