@@ -43,7 +43,7 @@ def cf_generate(prompt, system="You are a precise assistant.", max_tokens=1500, 
 
 
 # ============================================================
-# خلاصه‌ساز — نسخه‌ی ۳ call جدا
+# خلاصه‌ساز — ۳ call جدا
 # ============================================================
 def summarize_document(full_text, lang):
     if not full_text or len(full_text.strip()) < 100:
@@ -294,9 +294,6 @@ def multi_query_search(question, embedder, index, chunks, bm25, top_k=6, use_exp
     return [r["chunk"] for r in ranked[:top_k]]
 
 
-# ============================================================
-# NEW: rerank با score برمی‌گردونه
-# ============================================================
 def rerank_maxsim_scored(question, candidates, embedder, top_k=3):
     q_emb = embedder.encode([question], convert_to_numpy=True)[0]
     q_norm = np.linalg.norm(q_emb) + 1e-8
@@ -342,9 +339,6 @@ def build_search_query(question, history):
     return question
 
 
-# ============================================================
-# rag_query — الان ۳ چیز برمی‌گردونه: (answer, sources, details)
-# ============================================================
 def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansion=True):
     history = history or []
     search_query = build_search_query(question, history)
@@ -402,14 +396,20 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
     answer = result["choices"][0]["message"]["content"]
     sources = list({(c["source"], c["page"]) for c in retrieved})
 
-    # امتیاز اطمینان
+    # ============================================================
+    # امتیاز اطمینان — بر اساس بهترین چانک (نه میانگین همه)
+    # ============================================================
     is_not_in_text = ("Not in text" in answer) or ("در متن نیست" in answer)
     if is_not_in_text or not scored_chunks:
         confidence = 0
     else:
-        scores = [s for _, s in scored_chunks]
-        avg_score = sum(scores) / len(scores)
-        confidence = round(min(99, max(10, avg_score * 100)))
+        top_score = scored_chunks[0][1]
+        relevant = [s for _, s in scored_chunks if s >= 0.35]
+        if len(relevant) >= 2:
+            conf_raw = top_score * 0.75 + relevant[1] * 0.25
+        else:
+            conf_raw = top_score
+        confidence = round(min(95, max(10, conf_raw * 115)))
 
     details = {
         "chunks": [
@@ -570,9 +570,7 @@ if st.session_state.get("current_doc_key") != doc_key:
     st.session_state.messages = []
     st.session_state.current_doc_key = doc_key
 
-# ============================================================
-# نمایش تاریخچه با confidence + why + 👎
-# ============================================================
+
 def render_assistant_extras(idx, msg):
     """امتیاز اطمینان + دکمه‌ی چرا + 👎 برای هر پیام assistant"""
     conf = msg.get("confidence")
@@ -586,12 +584,17 @@ def render_assistant_extras(idx, msg):
 
     chunks_meta = msg.get("chunks", [])
     if chunks_meta:
-        with st.expander("🔍 چرا این جواب؟ (بخش‌های بازیابی‌شده)", expanded=False):
-            for k, ch in enumerate(chunks_meta):
-                st.markdown(
-                    f"**بخش {k+1} — صفحه {ch['page']} — امتیاز: `{ch['score']}`**"
-                )
-                st.caption(ch["text"][:400] + ("..." if len(ch["text"]) > 400 else ""))
+        # فقط چانک‌های مرتبط (>= 0.30) رو نشون بده
+        visible = [c for c in chunks_meta if c["score"] >= 0.30]
+        if visible:
+            with st.expander("🔍 چرا این جواب؟ (بخش‌های بازیابی‌شده)", expanded=False):
+                for k, ch in enumerate(visible):
+                    st.markdown(
+                        f"**بخش {k+1} — صفحه {ch['page']} — امتیاز: `{ch['score']}`**"
+                    )
+                    st.caption(ch["text"][:400] + ("..." if len(ch["text"]) > 400 else ""))
+        else:
+            st.caption("⚠️ چانک مناسبی پیدا نشد — احتمالاً سند این اطلاعات را ندارد")
 
     fb_key = f"fb_{idx}"
     if st.session_state.get(fb_key) == "down":
@@ -633,12 +636,10 @@ if prompt:
             full = f"{answer}\n\n---\n**Sources / منابع:**\n{src_text}"
         st.markdown(full)
 
-    # ذخیره با metadata
     st.session_state.messages.append({
         "role": "assistant",
         "content": full,
         "confidence": details.get("confidence"),
         "chunks": details.get("chunks", []),
     })
-    # حرکت پیام تازه به حلقه‌ی بالا برای نمایش consistent با دکمه‌ها
     st.rerun()
