@@ -112,8 +112,10 @@ st.markdown("""
 
 st.markdown('<div class="brand-title">Javid RAG</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="brand-tagline">AI that reads your documents — and only your documents.</div>',
+st.markdown(
+    '<div class="brand-tagline">Ask your documents. Get answers. Zero hallucinations.</div>',
     unsafe_allow_html=True
+)
 )
 st.markdown(
     '<span class="brand-badge">🔒 Zero hallucinations</span>'
