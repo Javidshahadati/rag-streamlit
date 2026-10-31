@@ -533,6 +533,35 @@ st.sidebar.header("📂 Select your document / سند خودت را انتخاب
 uploaded_file = st.sidebar.file_uploader("Upload PDF or TXT (optional)", type=["pdf", "txt"])
 use_expansion = st.sidebar.checkbox("Enable Multi-Query Expansion", value=True)
 
+
+# ============================================================
+# About / درباره
+# ============================================================
+st.sidebar.divider()
+with st.sidebar.expander("ℹ️ About DocuSage"):
+    st.markdown(
+        """
+**DocuSage** answers questions from **your** documents — and only your documents.
+
+### 🎯 Why DocuSage?
+- 📄 **Upload any PDF or TXT** — ask in Persian or English
+- 🎯 **Zero hallucinations** — if the answer isn't in the document, it says so
+- 🔍 **Full transparency** — see exactly which chunks answered your question
+- 🧠 **Conversation memory** — follow-up questions work naturally
+- 📊 **Confidence scores** — know how sure the answer is
+
+### 📈 Validation
+Validated on 50 test questions — zero hallucinations on out-of-doc queries.
+
+### 🔗 Links
+- [📊 Case Study](https://docusage-query-flow.base44.app)
+- [💻 GitHub](https://github.com/javidshahadati/rag-streamlit)
+- [👤 LinkedIn](https://www.linkedin.com/in/javid-shahadati-a867a0447/)
+
+### 👨‍💻 Built by
+Javid Shahadati — RAG Specialist
+        """
+    )
 if uploaded_file is not None:
     doc = extract_text_from_upload(uploaded_file)
     doc_key = f"upload_{uploaded_file.name}_{uploaded_file.size}"
