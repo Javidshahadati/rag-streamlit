@@ -12,7 +12,7 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 
-st.set_page_config(page_title="RAG PDF Assistant", page_icon="🤖")
+st.set_page_config(page_title="DocuSage", page_icon="🧠")
 
 APP_BASE_URL = "https://javid-rag-assistant.streamlit.app"
 
@@ -81,8 +81,47 @@ if share_token:
         st.stop()
 
 
-st.title("🤖 RAG PDF Assistant — دستیار RAG")
-st.caption("Ask in English or Persian — the assistant remembers the conversation.")
+st.markdown("""
+<style>
+    .brand-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        background: linear-gradient(90deg, #1e40af 0%, #7c3aed 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0;
+    }
+    .brand-tagline {
+        color: #6b7280;
+        font-size: 1.05rem;
+        margin-top: -8px;
+        margin-bottom: 1rem;
+    }
+    .brand-badge {
+        display: inline-block;
+        background: #eef2ff;
+        color: #4338ca;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        margin-right: 6px;
+        margin-bottom: 6px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="brand-title">DocuSage</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="brand-tagline">AI that reads your documents — and only your documents.</div>',
+    unsafe_allow_html=True
+)
+st.markdown(
+    '<span class="brand-badge">🔒 Zero hallucinations</span>'
+    '<span class="brand-badge">🌐 Bilingual</span>'
+    '<span class="brand-badge">📄 PDF + TXT</span>',
+    unsafe_allow_html=True
+)
+st.divider()
 
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
