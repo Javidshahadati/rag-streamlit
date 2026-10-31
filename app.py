@@ -110,7 +110,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="brand-title">DocuSage</div>', unsafe_allow_html=True)
+st.markdown('<div class="brand-title">Javid RAG</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="brand-tagline">AI that reads your documents — and only your documents.</div>',
     unsafe_allow_html=True
