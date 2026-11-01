@@ -577,7 +577,19 @@ else:
     doc_key = "default"
 
 if doc is None or not doc["pages"]:
-    st.error("No valid document found. / هیچ سند معتبری یافت نشد.")
+    st.error("❌ No valid document found. / هیچ سند معتبری یافت نشد.")
+    st.stop()
+
+# تشخیص PDF اسکن‌شده یا خالی
+_total_text = " ".join(p["text"] for p in doc["pages"]).strip()
+if len(_total_text) < 200:
+    st.error(
+        "📄 **Scanned or empty PDF detected / این PDF اسکن‌شده است یا متن کافی ندارد**\n\n"
+        "**English:** This PDF appears to be scanned or contains no readable text. "
+        "Please upload a text-based PDF (where you can select the text).\n\n"
+        "**فارسی:** اپ فعلاً فقط PDFهای **متنی** (قابل انتخاب) را پشتیبانی می‌کند. "
+        "لطفاً یک PDF متنی آپلود کنید."
+    )
     st.stop()
 
 pages_json = json.dumps(doc["pages"], ensure_ascii=False)
