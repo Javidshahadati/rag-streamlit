@@ -350,6 +350,7 @@ def generate_query_variants(question, n=3):
         "model": CF_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 200,
+        "temperature": 0.2,
     }
     try:
         response = requests.post(CF_URL, headers=headers, json=payload, timeout=30)
