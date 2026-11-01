@@ -446,6 +446,13 @@ def build_search_query(question, history):
         return question
 
     # ترکیب ۲ سوال قبلی کاربر (نه فقط آخرین) تا موضوع اصلی حفظ بشه
+    previous_users = [m["content"] for m in reversed(history) if m["role"] == "user"][:2]
+    if previous_users:
+        combined = " — ".join(reversed(previous_users))
+        return f"{combined} — {question}"
+    return question
+
+    # ترکیب ۲ سوال قبلی کاربر (نه فقط آخرین) تا موضوع اصلی حفظ بشه
 previous_users = [m["content"] for m in reversed(history) if m["role"] == "user"][:2]
 if previous_users:
     combined = " — ".join(reversed(previous_users))
