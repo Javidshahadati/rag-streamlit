@@ -780,24 +780,24 @@ def render_assistant_extras(idx, msg):
             st.caption("⚠️ چانک مناسبی پیدا نشد — احتمالاً سند این اطلاعات را ندارد")
 
     fb_key = f"fb_{idx}"
-current_fb = st.session_state.get(fb_key)
+    current_fb = st.session_state.get(fb_key)
 
-if current_fb == "up":
-    st.caption("🙏 ممنون — خوشحالم که کمک کرد")
-elif current_fb == "down":
-    st.caption("📝 ثبت شد — ممنون که کمک کردی بهتر بشم")
-else:
-    fb_col1, fb_col2, fb_col3 = st.columns([3, 1, 1])
-    with fb_col1:
-        st.caption("این جواب چطور بود؟")
-    with fb_col2:
-        if st.button("👍", key=f"up_{fb_key}", help="جواب خوب بود"):
-            st.session_state[fb_key] = "up"
-            st.rerun()
-    with fb_col3:
-        if st.button("👎", key=f"down_{fb_key}", help="جواب دقیق نبود"):
-            st.session_state[fb_key] = "down"
-            st.rerun()
+    if current_fb == "up":
+        st.caption("🙏 ممنون — خوشحالم که کمک کرد")
+    elif current_fb == "down":
+        st.caption("📝 ثبت شد — ممنون که کمک کردی بهتر بشم")
+    else:
+        fb_col1, fb_col2, fb_col3 = st.columns([3, 1, 1])
+        with fb_col1:
+            st.caption("این جواب چطور بود؟")
+        with fb_col2:
+            if st.button("👍", key=f"up_{fb_key}", help="جواب خوب بود"):
+                st.session_state[fb_key] = "up"
+                st.rerun()
+        with fb_col3:
+            if st.button("👎", key=f"down_{fb_key}", help="جواب دقیق نبود"):
+                st.session_state[fb_key] = "down"
+                st.rerun()
 
 
 for i, msg in enumerate(st.session_state.messages):
