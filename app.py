@@ -1,4 +1,4 @@
-APP_CODE = '''import os
+import os
 import io
 import json
 import re
