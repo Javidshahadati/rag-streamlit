@@ -518,7 +518,7 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
             conf_raw = top_score * 0.75 + relevant[1] * 0.25
         else:
             conf_raw = top_score
-        confidence = round(min(95, max(10, conf_raw * 115)))
+        confidence = round(min(95, max(10, conf_raw * 140)))
 
     details = {
         "chunks": [
