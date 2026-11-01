@@ -445,10 +445,12 @@ def build_search_query(question, history):
     if not is_follow_up:
         return question
 
-    for msg in reversed(history):
-        if msg["role"] == "user":
-            return f"{msg['content']} — {question}"
-    return question
+    # ترکیب ۲ سوال قبلی کاربر (نه فقط آخرین) تا موضوع اصلی حفظ بشه
+previous_users = [m["content"] for m in reversed(history) if m["role"] == "user"][:2]
+if previous_users:
+    combined = " — ".join(reversed(previous_users))
+    return f"{combined} — {question}"
+return question
 
 
 def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansion=True):
