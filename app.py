@@ -302,7 +302,7 @@ def extract_text_from_default():
     return {"name": os.path.basename(FILE_PATH), "pages": pages}
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=3)
 def build_index(doc_key, doc_name, pages_json):
     pages = json.loads(pages_json)
 
@@ -597,6 +597,18 @@ if len(_total_text) < 200:
     )
     st.stop()
 
+
+# محدودیت حجم فایل
+MAX_FILE_MB = 10
+if uploaded_file is not None and uploaded_file.size > MAX_FILE_MB * 1024 * 1024:
+    st.error(
+        f"📦 **File too large / فایل خیلی بزرگ است**\n\n"
+        f"**English:** Max file size is {MAX_FILE_MB}MB. Your file is {uploaded_file.size / (1024*1024):.1f}MB. "
+        f"Please upload a smaller PDF or split it into parts.\n\n"
+        f"**فارسی:** حداکثر حجم فایل {MAX_FILE_MB} مگابایت است. "
+        f"فایل شما {uploaded_file.size / (1024*1024):.1f} مگابایت است. لطفاً فایل کوچک‌تری آپلود کنید."
+    )
+    st.stop()
 pages_json = json.dumps(doc["pages"], ensure_ascii=False)
 
 with st.spinner(f"Building index from «{doc['name']}»..."):
