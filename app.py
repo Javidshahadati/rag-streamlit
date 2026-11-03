@@ -682,7 +682,7 @@ Javid Shahadati — RAG Specialist
 
 
 # ============================================================
-# پردازش آپلود + شمارش (با hash محتوا)
+# پردازش آپلود (با ذخیره در session_state)
 # ============================================================
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
@@ -698,13 +698,17 @@ if uploaded_file is not None:
             st.stop()
         st.session_state.usage_count += 1
         st.session_state.last_content_hash = content_hash
-        st.session_state.upload_key += 1
+        st.session_state.current_doc = extract_text_from_upload(uploaded_file)
+        st.session_state.current_doc_key = new_key
 
-    doc = extract_text_from_upload(uploaded_file)
-    doc_key = new_key
+    doc = st.session_state.get("current_doc")
+    doc_key = st.session_state.get("current_doc_key", "default")
+elif st.session_state.get("current_doc"):
+    doc = st.session_state.current_doc
+    doc_key = st.session_state.current_doc_key
 else:
     doc = extract_text_from_default()
-    doc_key = "default"
+    doc_key = "default""
 
 
 # شمارنده
