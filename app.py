@@ -225,7 +225,7 @@ PDF و TXT. حداکثر ۱۰ مگابایت.
 
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
 CF_API_TOKEN = st.secrets["CF_API_TOKEN"]
-CF_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
+CF_MODEL = "@cf/qwen/qwen3.8-27b"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions"
 
 MAX_HISTORY_TURNS = 3
