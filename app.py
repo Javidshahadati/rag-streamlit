@@ -640,6 +640,7 @@ if st.sidebar.button("🗑️ پاک کردن سند / Clear document", use_cont
     st.session_state.summary = None
     st.session_state.suggested_questions = None
     st.session_state.current_doc_key = None
+    st.session_state.current_doc = None
     st.session_state.last_content_hash = None
     st.rerun()
 
