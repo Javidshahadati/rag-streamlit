@@ -14,6 +14,10 @@ from rank_bm25 import BM25Okapi
 
 st.set_page_config(page_title="Javid RAG", page_icon="🧠")
 
+FREE_LIMIT = 5
+if "usage_count" not in st.session_state:
+    st.session_state.usage_count = 0
+
 APP_BASE_URL = "https://javid-rag-assistant.streamlit.app"
 
 
@@ -80,7 +84,7 @@ if share_token:
 
 
 # ============================================================
-# برند
+# CSS + برند
 # ============================================================
 st.markdown("""
 <style>
@@ -108,6 +112,33 @@ st.markdown("""
         margin-right: 6px;
         margin-bottom: 6px;
     }
+    .pricing-card {
+        border-radius: 20px;
+        padding: 1.5rem;
+        text-align: center;
+        border: 2px solid #e2e8f0;
+        background: white;
+    }
+    .pricing-card.pro {
+        border-color: #7c3aed;
+        background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+        box-shadow: 0 10px 30px rgba(124, 58, 237, 0.15);
+    }
+    .pricing-title { font-size: 1.3rem; font-weight: 700; color: #1e293b; }
+    .pricing-price { font-size: 2.2rem; font-weight: 800; color: #1e40af; margin: 0.5rem 0; }
+    .pricing-price.pro { color: #7c3aed; }
+    .pricing-features { text-align: right; font-size: 0.9rem; color: #475569; margin-top: 1rem; list-style: none; padding: 0; }
+    .pricing-features li { margin: 0.4rem 0; }
+    .usage-info {
+        background: #eef2ff;
+        border: 1px solid #c7d2fe;
+        border-radius: 12px;
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+        color: #3730a3;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,6 +154,70 @@ st.markdown(
     unsafe_allow_html=True
 )
 st.divider()
+
+
+# ============================================================
+# قیمت‌ها
+# ============================================================
+with st.expander("💎 پلن‌ها و قیمت‌ها", expanded=False):
+    col_free, col_pro = st.columns(2)
+    with col_free:
+        st.markdown("""
+        <div class="pricing-card">
+            <div class="pricing-title">🎁 رایگان</div>
+            <div class="pricing-price">$۰</div>
+            <ul class="pricing-features">
+                <li>✅ ۵ سند در روز</li>
+                <li>✅ تا ۱۰ مگابایت</li>
+                <li>✅ چت + خلاصه</li>
+                <li>✅ سوالات پیشنهادی</li>
+                <li>✅ لینک اشتراک</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_pro:
+        st.markdown("""
+        <div class="pricing-card pro">
+            <div class="pricing-title">💎 حرفه‌ای</div>
+            <div class="pricing-price pro">$۱۲ <span style="font-size:1rem;font-weight:400">/ ماه</span></div>
+            <ul class="pricing-features">
+                <li>✅ نامحدود</li>
+                <li>✅ تا ۵۰ مگابایت</li>
+                <li>✅ چت + خلاصه</li>
+                <li>✅ پشتیبانی اولویت‌دار</li>
+                <li>✅ API دسترسی</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    st.caption("⚠️ پرداخت پلن حرفه‌ای به‌زودی فعال می‌شود.")
+
+
+# ============================================================
+# FAQ
+# ============================================================
+with st.expander("❓ سوالات متداول (FAQ)", expanded=False):
+    st.markdown("""
+**چند سند رایگان دارم؟**  
+۵ سند در روز. برای نامحدود، پلن حرفه‌ای ($۱۲/ماه) به‌زودی.
+
+**چه فرمت‌هایی پشتیبانی می‌شه؟**  
+PDF و TXT. حداکثر ۱۰ مگابایت.
+
+**اگه PDF اسکن‌شده باشه؟**  
+فعلاً فقط PDF متنی (قابل انتخاب). OCR به‌زودی.
+
+**آیا امن است؟**  
+فایل‌ها فقط برای پردازش استفاده می‌شن، جایی ذخیره نمی‌شن.
+
+**چطور پول بدم؟**  
+پلن حرفه‌ای به‌زودی فعال می‌شود.
+
+**چه زبان‌هایی؟**  
+فارسی و انگلیسی — سوال به هر زبانی، جواب به همون زبان.
+
+**آیا می‌تونم گفتگو رو به اشتراک بذارم؟**  
+بله، بعد از چت، دکمه‌ی «🔗 لینک اشتراک» رو بزن.
+""")
 
 
 CF_ACCOUNT_ID = st.secrets["CF_ACCOUNT_ID"]
@@ -450,11 +545,6 @@ def build_search_query(question, history):
         return " — ".join(reversed(prev)) + " — " + question
     return question
 
-    
-
-
-    
-
 
 def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansion=True):
     history = history or []
@@ -545,7 +635,7 @@ use_expansion = st.sidebar.checkbox("Enable Multi-Query Expansion", value=True)
 
 
 # ============================================================
-# About
+# About (سایدبار)
 # ============================================================
 st.sidebar.divider()
 with st.sidebar.expander("ℹ️ About Javid RAG"):
@@ -574,12 +664,38 @@ Javid Shahadati — RAG Specialist
     )
 
 
+# ============================================================
+# پردازش آپلود + شمارش
+# ============================================================
 if uploaded_file is not None:
+    new_key = f"upload_{uploaded_file.name}_{uploaded_file.size}"
+    if st.session_state.get("current_doc_key") != new_key:
+        if st.session_state.usage_count >= FREE_LIMIT:
+            st.error(
+                "🚫 **به محدودیت رایگان رسیدی!**\n\n"
+                "پلن حرفه‌ای ($۱۲/ماه) به‌زودی فعال می‌شود."
+            )
+            st.stop()
+        st.session_state.usage_count += 1
     doc = extract_text_from_upload(uploaded_file)
-    doc_key = f"upload_{uploaded_file.name}_{uploaded_file.size}"
+    doc_key = new_key
 else:
     doc = extract_text_from_default()
     doc_key = "default"
+
+# شمارنده
+remaining = max(0, FREE_LIMIT - st.session_state.usage_count)
+st.markdown(
+    f'<div class="usage-info">🎁 استفاده‌ی رایگان امروز: <strong>{remaining} از {FREE_LIMIT}</strong> سند باقی مانده</div>',
+    unsafe_allow_html=True
+)
+
+# دکمه ریست مخفی (فقط با ?admin=MY_SECRET_2026)
+admin_mode = st.query_params.get("admin") == "MY_SECRET_2026"
+if admin_mode and st.session_state.usage_count > 0:
+    if st.button("🔄 ریست تست (ادمین)", key="reset_usage"):
+        st.session_state.usage_count = 0
+        st.rerun()
 
 if doc is None or not doc["pages"]:
     st.error("❌ No valid document found. / هیچ سند معتبری یافت نشد.")
@@ -609,6 +725,7 @@ if uploaded_file is not None and uploaded_file.size > MAX_FILE_MB * 1024 * 1024:
         f"فایل شما {uploaded_file.size / (1024*1024):.1f} مگابایت است. لطفاً فایل کوچک‌تری آپلود کنید."
     )
     st.stop()
+
 pages_json = json.dumps(doc["pages"], ensure_ascii=False)
 
 with st.spinner(f"Building index from «{doc['name']}»..."):
