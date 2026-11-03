@@ -4,6 +4,7 @@ import json
 import re
 import base64
 import zlib
+import hashlib
 import streamlit as st
 import requests
 import numpy as np
@@ -17,6 +18,8 @@ st.set_page_config(page_title="Javid RAG", page_icon="🧠")
 FREE_LIMIT = 5
 if "usage_count" not in st.session_state:
     st.session_state.usage_count = 0
+if "upload_key" not in st.session_state:
+    st.session_state.upload_key = 0
 
 APP_BASE_URL = "https://javid-rag-assistant.streamlit.app"
 
@@ -627,10 +630,24 @@ def rag_query(question, embedder, index, chunks, bm25, history=None, use_expansi
 
 
 # ============================================================
-# سایدبار
+# سایدبار — با دکمه پاک کردن سند و upload_key
 # ============================================================
 st.sidebar.header("📂 Select your document / سند خودت را انتخاب کن")
-uploaded_file = st.sidebar.file_uploader("Upload PDF or TXT (optional)", type=["pdf", "txt"])
+
+if st.sidebar.button("🗑️ پاک کردن سند / Clear document", use_container_width=True):
+    st.session_state.upload_key += 1
+    st.session_state.messages = []
+    st.session_state.summary = None
+    st.session_state.suggested_questions = None
+    st.session_state.current_doc_key = None
+    st.session_state.last_content_hash = None
+    st.rerun()
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload PDF or TXT (optional)",
+    type=["pdf", "txt"],
+    key=f"upload_{st.session_state.upload_key}"
+)
 use_expansion = st.sidebar.checkbox("Enable Multi-Query Expansion", value=True)
 
 
@@ -665,11 +682,14 @@ Javid Shahadati — RAG Specialist
 
 
 # ============================================================
-# پردازش آپلود + شمارش
+# پردازش آپلود + شمارش (با hash محتوا)
 # ============================================================
 if uploaded_file is not None:
-    new_key = f"upload_{uploaded_file.name}_{uploaded_file.size}"
-    if st.session_state.get("current_doc_key") != new_key:
+    file_bytes = uploaded_file.getvalue()
+    content_hash = hashlib.md5(file_bytes).hexdigest()[:12]
+    new_key = f"upload_{content_hash}"
+
+    if st.session_state.get("last_content_hash") != content_hash:
         if st.session_state.usage_count >= FREE_LIMIT:
             st.error(
                 "🚫 **به محدودیت رایگان رسیدی!**\n\n"
@@ -677,11 +697,15 @@ if uploaded_file is not None:
             )
             st.stop()
         st.session_state.usage_count += 1
+        st.session_state.last_content_hash = content_hash
+        st.session_state.upload_key += 1
+
     doc = extract_text_from_upload(uploaded_file)
     doc_key = new_key
 else:
     doc = extract_text_from_default()
     doc_key = "default"
+
 
 # شمارنده
 remaining = max(0, FREE_LIMIT - st.session_state.usage_count)
