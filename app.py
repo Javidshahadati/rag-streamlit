@@ -709,7 +709,7 @@ elif st.session_state.get("current_doc"):
     doc_key = st.session_state.current_doc_key
 else:
     doc = extract_text_from_default()
-    doc_key = "default""
+    doc_key = "default"
 
 
 # شمارنده
