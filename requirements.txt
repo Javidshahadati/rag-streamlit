@@ -1,4 +1,6 @@
-streamlit
+fastapi
+uvicorn
+python-multipart
 sentence-transformers
 faiss-cpu
 requests
