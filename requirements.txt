@@ -1,6 +1,4 @@
-fastapi
-uvicorn
-python-multipart
+gradio
 sentence-transformers
 faiss-cpu
 requests
