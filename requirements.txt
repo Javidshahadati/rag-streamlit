@@ -1,4 +1,4 @@
-gradio
+streamlit
 sentence-transformers
 faiss-cpu
 requests
